@@ -1,92 +1,129 @@
-import type { Inputs, Plan } from './model';
-import { validDate } from './model';
-import type { Simulation } from './simulation';
+import { validDate, type Inputs, type Plan } from './model';
 
-export type Draft = { [K in keyof Inputs]: string };
+export type Draft = Record<keyof Inputs, string>;
+export const essentialKeys = [
+  'baseline',
+  'effect',
+  'power',
+  'confidence',
+  'dailyLoans',
+  'labelLagDays',
+] as const;
+export const numericKeys = [...essentialKeys, 'treatmentShare', 'coverage'] as const;
+
 export const emptyDraft = (): Draft => ({
   baseline: '',
   effect: '',
   effectMode: 'relative',
   power: '',
   confidence: '',
-  dailyApplicants: '',
-  funding: '',
-  treatmentShare: '',
-  observationDays: '',
-  reportingDays: '',
-  coverage: '',
+  dailyLoans: '',
+  labelLagDays: '',
+  treatmentShare: '50',
+  coverage: '100',
   startDate: '',
   outcome: '',
-  seed: '42',
 });
-export const numericKeys = [
-  'baseline',
-  'effect',
-  'power',
-  'confidence',
-  'dailyApplicants',
-  'funding',
-  'treatmentShare',
-  'observationDays',
-  'reportingDays',
-  'coverage',
-  'seed',
-] as const;
 
 export function parseDraft(draft: Draft): Inputs {
-  const parsed = { ...draft } as unknown as Inputs;
+  const parsed = {
+    ...draft,
+    startDate: draft.startDate.trim() || undefined,
+    outcome: draft.outcome.trim() || undefined,
+  } as unknown as Inputs;
   for (const key of numericKeys) parsed[key] = draft[key].trim() === '' ? NaN : Number(draft[key]);
   return parsed;
 }
 
 export function exampleDraft(): Draft {
-  const today = new Date();
-  const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   return {
+    ...emptyDraft(),
     baseline: '10',
     effect: '10',
-    effectMode: 'relative',
     power: '80',
     confidence: '95',
-    dailyApplicants: '1000',
-    funding: '50',
-    treatmentShare: '50',
-    observationDays: '90',
-    reportingDays: '7',
-    coverage: '100',
-    startDate: localDate,
-    outcome: '30+ DPD within 90 days of disbursement',
-    seed: '42',
+    dailyLoans: '500',
+    labelLagDays: '97',
   };
 }
 
 export function restoreScenario(search: string): { draft: Draft; error: string | null } {
   const draft = emptyDraft();
   const params = new URLSearchParams(search);
-  if (!params.has('v')) return { draft, error: null };
-  if (params.get('v') !== '1')
+  const version = params.get('v');
+  if (!version) return { draft, error: null };
+  if (version !== '1' && version !== '2')
     return {
       draft,
-      error: 'This scenario link uses an unsupported version. Enter a new scenario below.',
+      error:
+        'This scenario link uses an unsupported version. Enter your assumptions or try the example.',
     };
   for (const key of Object.keys(draft) as (keyof Draft)[]) {
+    if (version === '1' && (key === 'dailyLoans' || key === 'labelLagDays')) continue;
     const value = params.get(key);
     if (value !== null) draft[key] = value.slice(0, 220);
   }
-  return { draft, error: null };
+  let error: string | null = null;
+  if (version === '1') {
+    const legacyNumber = (key: string) => {
+      const value = params.get(key);
+      return value?.trim() ? Number(value) : NaN;
+    };
+    const applicants = legacyNumber('dailyApplicants');
+    const funding = legacyNumber('funding');
+    const observation = legacyNumber('observationDays');
+    const reporting = legacyNumber('reportingDays');
+    if (
+      Number.isFinite(applicants) &&
+      applicants > 0 &&
+      Number.isFinite(funding) &&
+      funding > 0 &&
+      funding <= 100
+    ) {
+      draft.dailyLoans = String((applicants * funding) / 100);
+    } else
+      error =
+        'The old link has invalid or missing applicant/funding assumptions. Enter funded loans per day below.';
+    if (
+      Number.isInteger(observation) &&
+      observation >= 0 &&
+      observation <= 3650 &&
+      Number.isInteger(reporting) &&
+      reporting >= 0 &&
+      reporting <= 3650
+    ) {
+      draft.labelLagDays = String(observation + reporting);
+    } else
+      error =
+        'The old link has invalid or missing label delays. Enter the total label delay below.';
+  }
+  // Keep malformed values out of HTML number controls; never silently calculate them.
+  for (const key of numericKeys) {
+    if (draft[key].trim() && !Number.isFinite(Number(draft[key]))) {
+      draft[key] = '';
+      error = 'The shared link contains an invalid number. Correct the missing assumption below.';
+    }
+  }
+  if (!['relative', 'absolute'].includes(draft.effectMode)) {
+    draft.effectMode = 'relative';
+    draft.effect = '';
+    error = 'The shared link has an invalid reduction mode. Choose a reduction below.';
+  }
+  return { draft, error };
 }
 
 export function scenarioUrl(inputs: Inputs, base: string): string {
   const url = new URL(base);
   url.search = '';
   url.hash = '';
-  url.searchParams.set('v', '1');
-  for (const [key, value] of Object.entries(inputs)) url.searchParams.set(key, String(value));
+  url.searchParams.set('v', '2');
+  for (const [key, value] of Object.entries(inputs))
+    if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
   return url.toString();
 }
 
-export function formatDate(value: string) {
-  if (!validDate(value)) return '—';
+export function formatDate(value?: string) {
+  if (!value || !validDate(value)) return '—';
   return new Intl.DateTimeFormat('en', {
     day: 'numeric',
     month: 'short',
@@ -97,41 +134,41 @@ export function formatDate(value: string) {
 
 function csvCell(value: unknown) {
   let text = value === null || value === undefined ? '' : String(value);
-  // Treat user-written descriptions as literal spreadsheet text, never formulas.
-  if (typeof value === 'string' && /^[\s]*[=+@-]/.test(text)) text = `'${text}`;
+  if (typeof value === 'string' && /^\s*[=+@-]/.test(text)) text = `'${text}`;
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-export function exportCsv(plan: Plan, simulation: Simulation | null) {
+export function exportCsv(plan: Plan) {
   const rows: unknown[][] = [
-    ['CreditLab — planning assumptions'],
+    ['CreditLab — calculator projections'],
     [
-      'Assumption rates use percent units; weekly rates and reductions use fraction units (multiply by 100 for percent or percentage points).',
+      'Assumption rates use percent units. Weekly rates and intervals use fractions: multiply by 100 for percent or percentage points.',
     ],
-    ['Inference', 'Two-sided fixed-horizon; weekly views are descriptive'],
-    ['Outcome', plan.inputs.outcome],
+    ['Method', 'Two-sided fixed-horizon planning; projected intervals are not observed results'],
   ];
   for (const [key, value] of Object.entries(plan.inputs))
-    if (key !== 'outcome') rows.push([key, value]);
+    if (value !== undefined) rows.push([key, value]);
   rows.push(
     ['required_labels_control', plan.targetC],
     ['required_labels_treatment', plan.targetT],
     ['required_funded_control', plan.fundedC],
     ['required_funded_treatment', plan.fundedT],
-    ['enrollment_end', plan.enrollmentDate],
-    ['final_analysis', plan.finalDate],
-    ['simulation_runs', simulation?.runs ?? ''],
+    ['collection_days', plan.enrollmentDays],
+    ['label_delay_days', plan.lagDays],
+    ['total_days', plan.finalDay],
+    ['collection_end_date', plan.enrollmentDate],
+    ['analysis_date', plan.finalDate],
     [],
     [
       'elapsed_day',
       'week',
       'date',
-      'enrolled_control',
-      'enrolled_treatment',
-      'mature_control',
-      'mature_treatment',
-      'pending_maturity',
-      'unavailable_labels',
+      'projected_funded_control',
+      'projected_funded_treatment',
+      'projected_usable_control',
+      'projected_usable_treatment',
+      'projected_pending',
+      'projected_unavailable',
       'forecast_control_rate',
       'forecast_control_ci_low',
       'forecast_control_ci_high',
@@ -141,24 +178,9 @@ export function exportCsv(plan: Plan, simulation: Simulation | null) {
       'forecast_reduction',
       'forecast_reduction_ci_low',
       'forecast_reduction_ci_high',
-      'sim_bad_control',
-      'sim_bad_treatment',
-      'sim_control_rate',
-      'sim_control_ci_low',
-      'sim_control_ci_high',
-      'sim_treatment_rate',
-      'sim_treatment_ci_low',
-      'sim_treatment_ci_high',
-      'sim_reduction',
-      'sim_reduction_ci_low',
-      'sim_reduction_ci_high',
-      'pointwise_detection',
-      'detection_mc95_low',
-      'detection_mc95_high',
     ],
   );
-  plan.weeks.forEach((week, index) => {
-    const sim = simulation?.weeks[index];
+  for (const week of plan.weeks)
     rows.push([
       week.day,
       week.week,
@@ -175,17 +197,6 @@ export function exportCsv(plan: Plan, simulation: Simulation | null) {
       ...(week.expectedT ?? [null, null]),
       week.expectedDifference ? plan.delta : null,
       ...(week.expectedDifference ?? [null, null]),
-      sim?.countC,
-      sim?.countT,
-      sim?.rateC,
-      ...(sim?.intervalC ?? [null, null]),
-      sim?.rateT,
-      ...(sim?.intervalT ?? [null, null]),
-      sim?.difference,
-      ...(sim?.interval ?? [null, null]),
-      sim?.detection,
-      ...(sim?.detectionInterval ?? [null, null]),
     ]);
-  });
   return '\uFEFF' + rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
 }

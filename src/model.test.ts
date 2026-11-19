@@ -4,15 +4,20 @@ import {
   cdf,
   dateAt,
   differenceInterval,
-  powerAt,
   quantile,
   sampleSize,
   validate,
   wilson,
   type Inputs,
 } from './model';
-import { simulate } from './simulation';
-import { emptyDraft, exportCsv, parseDraft, restoreScenario, scenarioUrl } from './scenario';
+import {
+  emptyDraft,
+  exampleDraft,
+  exportCsv,
+  parseDraft,
+  restoreScenario,
+  scenarioUrl,
+} from './scenario';
 
 const inputs: Inputs = {
   baseline: 10,
@@ -20,15 +25,12 @@ const inputs: Inputs = {
   effectMode: 'relative',
   power: 80,
   confidence: 95,
-  dailyApplicants: 1000,
-  funding: 50,
+  dailyLoans: 500,
   treatmentShare: 50,
-  observationDays: 90,
-  reportingDays: 7,
+  labelLagDays: 97,
   coverage: 100,
   startDate: '2026-11-19',
   outcome: '30+ DPD within 90 days',
-  seed: 42,
 };
 
 describe('statistical reference checks', () => {
@@ -84,6 +86,18 @@ describe('statistical reference checks', () => {
 });
 
 describe('cohort timing and label coverage', () => {
+  it('calculates durations without requiring a start date or outcome description', () => {
+    const plan = buildPlan(parseDraft(exampleDraft()));
+    expect(plan.targetC).toBe(13495);
+    expect(plan.targetT).toBe(13495);
+    expect(plan.enrollmentDays).toBe(54);
+    expect(plan.finalDay).toBe(151);
+    expect(plan.inputs.startDate).toBeUndefined();
+    expect(plan.inputs.outcome).toBeUndefined();
+    expect(plan.enrollmentDate).toBeUndefined();
+    expect(plan.finalDate).toBeUndefined();
+    expect(plan.weeks.every((week) => week.date === undefined)).toBe(true);
+  });
   it('matches the example milestones and excludes immature outcomes', () => {
     const plan = buildPlan(inputs);
     expect(plan.targetC).toBe(13495);
@@ -119,10 +133,10 @@ describe('cohort timing and label coverage', () => {
   });
 
   it('handles zero lag, reporting delay, and UTC date boundaries', () => {
-    const noLag = buildPlan({ ...inputs, observationDays: 0, reportingDays: 0 });
+    const noLag = buildPlan({ ...inputs, labelLagDays: 0 });
     expect(noLag.finalDay).toBe(noLag.enrollmentDays);
     for (const week of noLag.weeks) expect(week.matureC).toBe(week.enrolledC);
-    expect(buildPlan({ ...inputs, reportingDays: 14 }).finalDay).toBe(
+    expect(buildPlan({ ...inputs, labelLagDays: 104 }).finalDay).toBe(
       buildPlan(inputs).finalDay + 7,
     );
     expect(dateAt('2028-02-28', 2)).toBe('2028-03-01');
@@ -145,16 +159,16 @@ describe('cohort timing and label coverage', () => {
 
   it('slower traffic increases enrollment; longer lag only extends readout', () => {
     const base = buildPlan(inputs);
-    expect(buildPlan({ ...inputs, dailyApplicants: 500 }).enrollmentDays).toBeGreaterThan(
+    expect(buildPlan({ ...inputs, dailyLoans: 250 }).enrollmentDays).toBeGreaterThan(
       base.enrollmentDays,
     );
-    expect(buildPlan({ ...inputs, observationDays: 180 }).enrollmentDays).toBe(base.enrollmentDays);
+    expect(buildPlan({ ...inputs, labelLagDays: 187 }).enrollmentDays).toBe(base.enrollmentDays);
   });
 
   it('handles fractional traffic, low coverage, and unbalanced allocation without missing targets', () => {
     const plan = buildPlan({
       ...inputs,
-      dailyApplicants: 234.5,
+      dailyLoans: 117.25,
       coverage: 67.3,
       treatmentShare: 23.7,
     });
@@ -168,6 +182,10 @@ describe('validation and portable scenarios', () => {
     const draft = emptyDraft();
     expect(draft.baseline).toBe('');
     expect(draft.power).toBe('');
+    expect(draft.dailyLoans).toBe('');
+    expect(draft.labelLagDays).toBe('');
+    expect(draft.treatmentShare).toBe('50');
+    expect(draft.coverage).toBe('100');
     expect(validate(parseDraft(draft)).length).toBeGreaterThan(5);
     for (const patch of [
       { effect: 0 },
@@ -175,16 +193,18 @@ describe('validation and portable scenarios', () => {
       { coverage: 0 },
       { treatmentShare: 100 },
       { startDate: '2026-02-30' },
-      { reportingDays: 0.5 },
-      { funding: Infinity },
+      { labelLagDays: 0.5 },
+      { dailyLoans: Infinity },
     ]) {
       expect(validate({ ...inputs, ...patch }).length).toBeGreaterThan(0);
     }
   });
 
-  it('round trips inputs and seed in versioned URLs', () => {
+  it('round trips inputs in version-2 URLs', () => {
     const original = { ...inputs, outcome: '30+ DPD, observed & complete' };
     const url = scenarioUrl(original, 'https://example.com/?old=true#old');
+    expect(new URL(url).searchParams.get('v')).toBe('2');
+    expect(url).not.toContain('seed');
     const restored = restoreScenario(new URL(url).search);
     expect(restored.error).toBeNull();
     expect(parseDraft(restored.draft)).toEqual(original);
@@ -194,51 +214,62 @@ describe('validation and portable scenarios', () => {
     ).toBeGreaterThan(0);
   });
 
+  it.each(['relative', 'absolute'])(
+    'converts old %s scenario links without changing the calculation',
+    (effectMode) => {
+      const legacy = new URLSearchParams({
+        v: '1',
+        baseline: '10',
+        effect: effectMode === 'relative' ? '10' : '1',
+        effectMode,
+        power: '80',
+        confidence: '95',
+        dailyApplicants: '1000',
+        funding: '50',
+        treatmentShare: '50',
+        observationDays: '90',
+        reportingDays: '7',
+        coverage: '100',
+        startDate: '2026-11-19',
+        outcome: '30+ DPD',
+        seed: '42',
+      });
+      const restored = restoreScenario(legacy.toString());
+      expect(restored.error).toBeNull();
+      expect(restored.draft.dailyLoans).toBe('500');
+      expect(restored.draft.labelLagDays).toBe('97');
+      expect(restored.draft).not.toHaveProperty('seed');
+      const plan = buildPlan(parseDraft(restored.draft));
+      expect(plan.targetC).toBe(13495);
+      expect(plan.enrollmentDays).toBe(54);
+      expect(plan.finalDay).toBe(151);
+      expect(plan.finalDate).toBe('2027-04-19');
+    },
+  );
+
+  it('rejects malformed legacy conversion assumptions instead of silently using defaults', () => {
+    for (const funding of ['-10', '101', 'oops', '']) {
+      const restored = restoreScenario(
+        `?v=1&dailyApplicants=1000&funding=${funding}&observationDays=90&reportingDays=7`,
+      );
+      expect(restored.error).not.toBeNull();
+      expect(restored.draft.dailyLoans).toBe('');
+    }
+    const restored = restoreScenario('?v=2&dailyLoans=Infinity&baseline=10');
+    expect(restored.error).not.toBeNull();
+    expect(restored.draft.dailyLoans).toBe('');
+  });
+
   it('exports assumptions and complete weeks without allowing CSV formulas', () => {
-    const csv = exportCsv(buildPlan({ ...inputs, outcome: '=HYPERLINK("example")' }), null);
+    const csv = exportCsv(buildPlan({ ...inputs, outcome: '=HYPERLINK("example")' }));
     expect(csv).toContain('"\'=HYPERLINK(""example"")"');
     expect(csv).toContain('forecast_reduction_ci_low');
     expect(csv).toContain('2027-04-19');
     expect(csv).toContain('"13495"');
     expect(csv).toMatch(/"-0\./);
     expect(csv).not.toMatch(/"'-0\./);
-  });
-});
-
-describe('seeded binomial experiments', () => {
-  it('is repeatable and accumulates cohorts without redrawing prior outcomes', () => {
-    const plan = buildPlan(inputs);
-    const first = simulate(plan, 100);
-    expect(simulate(plan, 100)).toEqual(first);
-    let lastC = 0;
-    let lastT = 0;
-    first.weeks.forEach((week, index) => {
-      expect(week.countC).toBeGreaterThanOrEqual(lastC);
-      expect(week.countT).toBeGreaterThanOrEqual(lastT);
-      expect(week.countC).toBeLessThanOrEqual(plan.weeks[index].matureC);
-      if (index && plan.weeks[index].matureC === plan.weeks[index - 1].matureC)
-        expect(week.countC).toBe(lastC);
-      lastC = week.countC;
-      lastT = week.countT;
-    });
-    expect(first.weeks[0].interval).toBeNull();
-  });
-
-  it('achieves expected final detection probability within Monte Carlo error', () => {
-    const plan = buildPlan(inputs);
-    const simulation = simulate(plan, 5000);
-    const probability = simulation.weeks.at(-1)!.detection!;
-    const final = plan.weeks.at(-1)!;
-    const expected = powerAt(final.matureC, final.matureT, plan.pC, plan.pT, 0.05);
-    expect(Math.abs(probability - expected)).toBeLessThan(0.025);
-    const mc = simulation.weeks.at(-1)!.detectionInterval!;
-    expect(mc[1] - mc[0]).toBeLessThan(0.04);
-  });
-
-  it('has about alpha/2 beneficial rejections under no effect', () => {
-    const plan = buildPlan(inputs);
-    const result = simulate(plan, 5000, [0.1, 0.1]);
-    expect(result.weeks.at(-1)!.detection).toBeGreaterThan(0.012);
-    expect(result.weeks.at(-1)!.detection).toBeLessThan(0.04);
+    expect(csv).not.toContain('sim_');
+    expect(csv).not.toContain('detection');
+    expect(csv).toContain('projected_usable_control');
   });
 });

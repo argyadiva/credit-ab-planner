@@ -6,22 +6,19 @@ export interface Inputs {
   effectMode: 'relative' | 'absolute';
   power: number;
   confidence: number;
-  dailyApplicants: number;
-  funding: number;
+  dailyLoans: number;
   treatmentShare: number;
-  observationDays: number;
-  reportingDays: number;
+  labelLagDays: number;
   coverage: number;
-  startDate: string;
-  outcome: string;
-  seed: number;
+  startDate?: string;
+  outcome?: string;
 }
 
 export type Interval = [number, number];
 export interface Week {
   day: number;
   week: number;
-  date: string;
+  date?: string;
   enrolledC: number;
   enrolledT: number;
   matureC: number;
@@ -45,8 +42,8 @@ export interface Plan {
   enrollmentDays: number;
   lagDays: number;
   finalDay: number;
-  enrollmentDate: string;
-  finalDate: string;
+  enrollmentDate?: string;
+  finalDate?: string;
   weeks: Week[];
   warnings: string[];
 }
@@ -62,51 +59,42 @@ export function validDate(value: string) {
   );
 }
 
-export function validate(input: Inputs): string[] {
-  const errors: string[] = [];
+export function validationErrors(input: Inputs): Partial<Record<keyof Inputs, string>> {
+  const errors: Partial<Record<keyof Inputs, string>> = {};
   const between = (value: number, min: number, max: number) =>
     Number.isFinite(value) && value > min && value < max;
   if (!between(input.baseline, 0, 100))
-    errors.push('Baseline bad rate must be between 0% and 100%.');
+    errors.baseline = 'Enter a bad rate above 0% and below 100%.';
   if (!['relative', 'absolute'].includes(input.effectMode))
-    errors.push('Select a valid reduction mode.');
+    errors.effectMode = 'Select relative percent or percentage points.';
   if (!Number.isFinite(input.effect) || input.effect <= 0)
-    errors.push('Expected reduction must be greater than zero.');
+    errors.effect = 'Enter a reduction greater than zero.';
   const target =
     input.effectMode === 'relative'
       ? input.baseline * (1 - input.effect / 100)
       : input.baseline - input.effect;
-  if (!between(target, 0, input.baseline))
-    errors.push('The target bad rate must be above 0% and below the baseline.');
-  if (!between(input.power, 50, 100)) errors.push('Power must be above 50% and below 100%.');
+  if (!errors.baseline && !errors.effect && !between(target, 0, input.baseline))
+    errors.effect = 'The target bad rate must stay above 0% and below the baseline.';
+  if (!between(input.power, 50, 100)) errors.power = 'Enter power above 50% and below 100%.';
   if (!between(input.confidence, 50, 100))
-    errors.push('Confidence must be above 50% and below 100%.');
-  if (!between(input.dailyApplicants, 0, 1_000_000_001))
-    errors.push('Daily applicants must be greater than 0 and at most 1 billion.');
-  if (!Number.isFinite(input.funding) || input.funding <= 0 || input.funding > 100)
-    errors.push('Funding rate must be above 0% and at most 100%.');
+    errors.confidence = 'Enter confidence above 50% and below 100%.';
+  if (!between(input.dailyLoans, 0, 1_000_000_001))
+    errors.dailyLoans = 'Enter funded loans per day above 0 and at most 1 billion.';
   if (!between(input.treatmentShare, 0, 100))
-    errors.push('Treatment allocation must be between 0% and 100%.');
+    errors.treatmentShare = 'Treatment allocation must be above 0% and below 100%.';
   if (!Number.isFinite(input.coverage) || input.coverage <= 0 || input.coverage > 100)
-    errors.push('Label coverage must be above 0% and at most 100%.');
-  if (
-    !Number.isInteger(input.observationDays) ||
-    input.observationDays < 0 ||
-    input.observationDays > 3650
-  )
-    errors.push('Observation window must be a whole number from 0 to 3,650 days.');
-  if (
-    !Number.isInteger(input.reportingDays) ||
-    input.reportingDays < 0 ||
-    input.reportingDays > 3650
-  )
-    errors.push('Reporting delay must be a whole number from 0 to 3,650 days.');
-  if (!validDate(input.startDate)) errors.push('Enter a valid experiment start date.');
-  if (!Number.isInteger(input.seed) || input.seed < 0 || input.seed > 4_294_967_295)
-    errors.push('Seed must be a whole number from 0 to 4,294,967,295.');
-  if (!input.outcome.trim() || input.outcome.length > 200)
-    errors.push('Describe the bad outcome in 200 characters or fewer.');
+    errors.coverage = 'Label coverage must be above 0% and at most 100%.';
+  if (!Number.isInteger(input.labelLagDays) || input.labelLagDays < 0 || input.labelLagDays > 7300)
+    errors.labelLagDays = 'Enter a whole number of days from 0 to 7,300.';
+  if (input.startDate && !validDate(input.startDate))
+    errors.startDate = 'Enter a valid start date or leave it blank.';
+  if (input.outcome && input.outcome.length > 200)
+    errors.outcome = 'Keep the description to 200 characters or fewer.';
   return errors;
+}
+
+export function validate(input: Inputs): string[] {
+  return Object.values(validationErrors(input));
 }
 
 /** Power of a two-sided pooled-null z test; unpooled alternative variance. */
@@ -183,7 +171,12 @@ export function differenceInterval(
 export function dateAt(start: string, elapsedDays: number) {
   const date = new Date(`${start}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + elapsedDays);
-  return date.toISOString().slice(0, 10);
+  const iso = date.toISOString();
+  if (!/^\d{4}-/.test(iso))
+    throw new Error(
+      'The projected date exceeds the supported calendar range. Choose an earlier start date.',
+    );
+  return iso.slice(0, 10);
 }
 
 export function buildPlan(inputs: Inputs): Plan {
@@ -198,7 +191,7 @@ export function buildPlan(inputs: Inputs): Plan {
   const coverage = inputs.coverage / 100;
   const fundedC = Math.ceil(sample.nC / coverage);
   const fundedT = Math.ceil(sample.nT / coverage);
-  const dailyFunded = (inputs.dailyApplicants * inputs.funding) / 100;
+  const dailyFunded = inputs.dailyLoans;
   const dailyC = dailyFunded * (1 - share);
   const dailyT = dailyFunded * share;
   let enrollmentDays = Math.ceil(Math.max(fundedC / dailyC, fundedT / dailyT));
@@ -212,7 +205,7 @@ export function buildPlan(inputs: Inputs): Plan {
     Math.floor(Math.floor(enrollmentDays * dailyT) * coverage) < sample.nT
   )
     enrollmentDays++;
-  const lagDays = inputs.observationDays + inputs.reportingDays;
+  const lagDays = inputs.labelLagDays;
   const finalDay = enrollmentDays + lagDays;
   if (finalDay > 36525)
     throw new Error(
@@ -234,7 +227,7 @@ export function buildPlan(inputs: Inputs): Plan {
     return {
       day,
       week: day / 7,
-      date: dateAt(inputs.startDate, day),
+      date: inputs.startDate ? dateAt(inputs.startDate, day) : undefined,
       enrolledC,
       enrolledT,
       matureC,
@@ -275,8 +268,8 @@ export function buildPlan(inputs: Inputs): Plan {
     enrollmentDays,
     lagDays,
     finalDay,
-    enrollmentDate: dateAt(inputs.startDate, enrollmentDays),
-    finalDate: dateAt(inputs.startDate, finalDay),
+    enrollmentDate: inputs.startDate ? dateAt(inputs.startDate, enrollmentDays) : undefined,
+    finalDate: inputs.startDate ? dateAt(inputs.startDate, finalDay) : undefined,
     weeks,
     warnings,
   };

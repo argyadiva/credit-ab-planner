@@ -1,6 +1,8 @@
-# CreditLab — Credit A/B Test Planner
+# CreditLab — Credit A/B Test Calculator
 
-A browser-only planner for randomized credit-score experiments with delayed bad-loan labels. Calculate sample requirements, distinguish enrollment from outcome maturity, and explore weekly confidence intervals and seeded hypothetical experiments.
+[Open the calculator](https://credit-ab-planner.vercel.app).
+
+A browser-only calculator for credit-score A/B test sample sizes, time until analysis, and projected weekly confidence intervals. Enter six assumptions; results update automatically. All results are deterministic projections from those assumptions.
 
 ## Run locally
 
@@ -17,19 +19,32 @@ npm run build
 npm run preview
 ```
 
-The application starts with blank assumptions. **Try an example** loads an explicitly illustrative scenario. Inputs are not sent to a backend. Shared URLs contain the entered aggregate assumptions, outcome description, and random seed. There is no borrower upload, account system, analytics, or database.
+## Calculator inputs
 
-## Inputs and outputs
+The six essential inputs start blank:
 
-Enter the control bad-loan rate, expected reduction (relative percent or percentage points), statistical power, two-sided confidence level, calendar-day eligible unique applicants, shared funding rate, treatment allocation, full observation window, reporting delay, eventual usable-label coverage, start date, and bad-outcome definition.
+- **Baseline bad-loan rate:** expected bad outcomes among funded loans in control.
+- **Expected reduction:** relative percent or percentage points, with the implied treatment rate displayed.
+- **Power:** probability of detecting the assumed effect at the final analysis under the model.
+- **Confidence level:** two-sided confidence level; alpha is one minus confidence.
+- **Funded loans per day:** total across both arms, averaged over calendar days.
+- **Total label delay:** days from funding to a usable outcome, including the observation window and reporting delay. Zero is supported.
 
-Results include labeled-sample targets per arm, funded-loan targets adjusted for coverage, whole-day enrollment and final-readout milestones, weekly enrollment and label states, forecast and simulated bad-rate/reduction intervals, and weekly pointwise detection frequencies from 1,000 simulations. CSV export includes all weeks, inputs, forecast arm intervals, simulated counts and intervals, and Monte Carlo uncertainty.
+Advanced settings default to 50/50 control/treatment allocation and 100% usable labels. Start date and outcome description are optional. Dates appear only when a start date is supplied. **Try an example** explicitly loads illustrative values; **Reset** clears essential inputs and restores advanced defaults.
+
+There are no uploads, accounts, data connections, database, analytics, random-outcome simulations, or server-side calculations. Share links contain manually entered aggregate assumptions. The application does not send calculation inputs to a backend.
+
+## Results
+
+The calculator shows labeled-sample targets per arm and total, collection days, and **collection days + label delay = total duration**. Label coverage increases the required funded volume when some loans are expected to lack usable final labels. A chart and accessible weekly table show projected usable samples, arm bad-rate confidence intervals, and the interval for the bad-rate reduction.
+
+Weeks with no usable labels are summarized in the table and can be expanded. CSV export includes every week, including day zero, all assumptions, forecast intervals, and optional dates. Assumption rates use percent units; weekly rates and reduction intervals are exported as fractions, with the conversion stated in the CSV. User-written spreadsheet formulas are escaped as literal text while negative numeric interval bounds remain numeric.
 
 ## Statistical methods
 
-Let `pC` and `pT` be the assumed control and treatment bad rates. Positive reduction means `pC - pT`. Relative reduction `r` gives `pT = pC × (1-r)`; absolute reduction subtracts percentage points from the control rate.
+Let `pC` and `pT` be the assumed control and treatment bad rates. Positive reduction means `pC - pT`. Relative reduction `r` gives `pT = pC * (1-r)`; an absolute reduction subtracts percentage points from the baseline rate.
 
-The sample-size calculation is the normal approximation to a two-sided pooled-null z-test for independent proportions. For proposed arm sizes `nC` and `nT`:
+Sample size uses the normal approximation to a two-sided pooled-null z-test for independent proportions. For proposed sizes `nC` and `nT`:
 
 ```text
 alpha = 1 - confidence
@@ -40,54 +55,48 @@ critical = normal_quantile(1-alpha/2) * SE0
 power = Phi((pC-pT-critical)/SE1) + Phi((-(pC-pT)-critical)/SE1)
 ```
 
-Integer bisection finds the control sample target using the configured treatment/control ratio. Treatment sample size is rounded up, and achieved approximate power is rechecked after rounding. This is an approximate, fixed-horizon superiority design, not an exact binomial or sequential design.
+Integer bisection finds the control target for the chosen treatment/control ratio. Treatment size is rounded upward and achieved approximate power is checked again after rounding. This is a fixed-horizon superiority design, not an exact binomial or sequential design.
 
-Arm-rate intervals use Wilson's score method. Reduction intervals use the Newcombe hybrid method combining the arm Wilson intervals. Expected forecast intervals substitute expected bad counts `n*p`, including fractional counts; these are illustrations of precision, not observed-data confidence intervals. Simulated intervals use actual integer binomial counts. The pooled z-test used for detection and Newcombe interval are distinct methods and need not give exactly matching finite-sample decisions.
+Arm-rate intervals use Wilson's score method. Reduction intervals use Newcombe's hybrid method combining the Wilson intervals. Forecast intervals substitute expected bad counts `n*p`, which may be fractional. These illustrate projected precision and are not observed-data confidence intervals or a guarantee of statistical significance.
 
-### Cohort timing
+### Timing and coverage
 
-Traffic, funding, allocation, and label coverage are deterministic planning expectations. Let `c` be usable-label coverage. Required funded volume is `ceil(labeled target / c)` in each arm. Whole-day enrollment continues until both arms can supply their target usable labels, then stops. Whole-day rounding may enroll a few extra loans.
+Daily funded volume, allocation, coverage, and bad rates are constant deterministic assumptions. For coverage `c`, required funded volume is `ceil(labeled target / c)` in each arm. Collection lasts until both arms can supply their required usable sample, rounded to whole calendar days. This may collect more loans than the minimum target.
 
-For elapsed day `d`, enrollment lasts `min(d, enrollmentDays)` days. Completed follow-up covers `max(0, min(d - observationDays - reportingDays, enrollmentDays))` days. Funded counts are floored to integers, followed by flooring usable-label counts after applying coverage. Pending loans have not finished follow-up; unavailable labels have finished follow-up but are excluded by the coverage assumption. Their sum with mature usable loans always equals total enrolled loans.
+For elapsed day `d`, collection spans `min(d, collectionDays)` days. Fully followed cohorts span `max(0, min(d - labelLagDays, collectionDays))` days. Funded counts are floored to integers, then usable counts are floored after coverage is applied. Pending and unavailable labels are excluded from the bad-rate denominator. Even outcomes known early remain excluded until the cohort completes the full delay, avoiding selective inclusion of early bad events.
 
-Date labels use elapsed days from midnight at the selected start date, with UTC calendar arithmetic to avoid daylight-saving shifts. For example, a 54-day enrollment period starting November 19, 2026 ends January 12, 2027. A further 97-day label lag gives an April 19, 2027 readout. Outcomes known early are still excluded until their cohort completes the full window, avoiding selective early inclusion of bad events.
+Collection stops at the funded target; follow-up continues for the final cohorts. Total duration is collection plus label delay. Optional calendar dates use UTC calendar arithmetic to avoid daylight-saving shifts, with the start date representing day zero.
 
-### Simulations
+### Reference example
 
-A Web Worker generates 1,000 experiments using the seeded `@stdlib/random-base-binomial` generator. New bad-outcome counts are drawn only for new mature cohorts; past outcomes remain fixed across weekly looks. The selected path is the first experiment for that seed. Re-run increments the seed; scenario links preserve it.
-
-Pointwise detection is the proportion of runs rejecting the two-sided pooled z-test **in the beneficial direction at that week**. Under no effect, this directional rejection rate is approximately `alpha/2`; the total two-sided false-positive rate is approximately `alpha`. Detection is not cumulative “ever significant” probability and does not permit early stopping. A 95% Wilson interval across runs reports Monte Carlo uncertainty, independently of the experiment confidence setting.
+A 10% baseline, 10% relative reduction to 9%, 80% power, and 95% confidence require **13,495 labels per arm**. At 500 funded loans per calendar day, split 50/50 with complete labels, sample collection takes **54 days**. A 97-day label delay gives **151 total days** until analysis. Adding November 19, 2026 as the start date gives collection completion on January 12, 2027 and analysis on April 19, 2027.
 
 ## Applicability and limits
 
-- Independent borrowers, with one analyzed loan per borrower; repeated-borrower clustering is not modeled.
-- Both policies use the same funding rate. Portfolio bad-rate comparisons at fixed lending volume do not isolate a causal score effect on a common set of funded borrowers.
-- Missing labels are unrelated to outcomes and have the same expected coverage in both arms. Coverage is an expectation, not a guarantee of an exact future label count.
-- Stable traffic, funding, population mix, and outcome rates; no seasonal traffic, changing maturity curve, competing risks, or survival analysis.
-- No borrower-level monitoring, sequential testing, early-stopping boundaries, loss modeling, or approval-rate optimization.
-- Sample-size power is a normal approximation. Small expected bad/good counts are flagged; early weekly approximations can be unreliable even if final samples are adequate.
-- Boundary bad rates, zero reductions, and nonpositive traffic/coverage are rejected. Scenarios above 10 billion labels per arm or 100 years are rejected to preserve numerical and browser usability limits.
+- Independent borrowers, with one analyzed loan each; repeat-borrower clustering is not modeled.
+- Comparable funding rates across scoring policies. Portfolio bad-rate comparisons do not isolate a score's causal effect on the same funded borrowers.
+- Missing labels are unrelated to outcomes and have the same expected coverage in both arms. Coverage is an expectation, not a guarantee of exact future counts.
+- Stable calendar-day volume, population mix, and bad rates. No seasonality, variable maturity curves, survival analysis, or loss modeling.
+- One planned final analysis. Weekly projections do not authorize early stopping.
+- Normal-approximation power can be unreliable for rare events or small samples. Final expected event counts below ten are flagged; early weekly intervals may still be imprecise.
+- Boundary bad rates, zero reduction, nonpositive volume/coverage, more than 10 billion labels per arm, and durations above 100 years are rejected.
 
-## Validation
+## Shared-link compatibility
 
-The test suite covers SciPy reference sample sizes for balanced and unequal allocation, statsmodels/Newcombe and Wilson reference intervals, equivalent reduction modes, cohort accounting and delayed labels, coverage adjustments, date boundaries, invalid/shared inputs, safe CSV cells, seeded reproducibility, and Monte Carlo detection behavior under the alternative and the null.
+New links use `v=2`, with `dailyLoans` and `labelLagDays`, and optional `startDate`/`outcome`.
 
-Example: 10% control bad rate, 10% relative reduction to 9%, 80% power, and 95% confidence require 13,495 labeled loans per arm. With 1,000 daily applicants, 50% funding, 50/50 allocation, and complete coverage, enrollment takes 54 days. A 90-day observation window plus 7-day reporting delay gives a 151-day final readout.
+Version-1 links remain readable. Their daily applicants multiplied by funding percentage become funded loans per day; observation plus reporting days become total label delay. Baseline, reduction mode, power, confidence, allocation, coverage, and optional descriptions/dates are preserved. Legacy random seeds are ignored. Malformed or unsupported scenarios receive an explanation rather than silently calculating invalid inputs.
 
-## Deployment
+## Validation and deployment
 
-Live website: [credit-ab-planner.vercel.app](https://credit-ab-planner.vercel.app).
+Tests cover independent statistical references for balanced and unequal allocation, Wilson/Newcombe intervals, equivalent reduction modes, timing and label coverage, optional dates, zero delay, blank/invalid assumptions, both link versions, and safe forecast CSV export. Browser QA covers automatic updates, keyboard navigation, sharing/export, and desktop/mobile layouts.
 
-The public source repository is `argyadiva/credit-ab-planner`, connected to the existing `credit-ab-planner` project in the `argyadivas-projects` Vercel team. Pushes to `main` automatically trigger production deployments; other branches and pull requests receive preview deployments through Vercel's GitHub integration.
+The public repository is `argyadiva/credit-ab-planner`, linked to the existing `credit-ab-planner` project in the `argyadivas-projects` Vercel team. Pushes to `main` trigger production deployments; other branches and pull requests receive Vercel previews. GitHub Actions runs tests and the production build for `main` pushes and pull requests. Vercel uses Node.js 24, `npm ci`, `npm run build`, and Vite's `dist` output. No runtime secrets or environment variables are required.
 
-Vercel uses Node.js 24, installs dependencies with `npm ci`, builds with `npm run build`, and serves the Vite `dist` output using `vercel.json`. GitHub Actions also runs `npm ci`, `npm test`, and `npm run build` for pushes to `main` and pull requests. No runtime secrets or environment variables are required, and no deployment credentials are stored in the repository.
-
-For a manual deployment from an authenticated development machine, run `npx vercel deploy --prod` from this checkout and select the existing `credit-ab-planner` project in the `argyadivas-projects` team.
+For a manual deployment from an authenticated machine, run `npx vercel deploy --prod` and select the existing project.
 
 ## References
 
 - [statsmodels: independent-proportions power](https://www.statsmodels.org/stable/generated/statsmodels.stats.proportion.power_proportions_2indep.html)
 - [statsmodels: Newcombe difference-interval implementation](https://github.com/statsmodels/statsmodels/blob/main/statsmodels/stats/proportion.py)
 - [NIST: Wilson confidence intervals](https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm)
-- [Design-Based Confidence Sequences: repeated-peeking implications](https://arxiv.org/abs/2210.08639)
-- [stdlib: binomial generator](https://github.com/stdlib-js/random-base-binomial)

@@ -1,43 +1,28 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import {
-  Activity,
   ArrowUpRight,
   BarChart3,
+  Calculator,
   CalendarDays,
   Check,
   ChevronDown,
-  CircleHelp,
   Clock3,
   Download,
-  FlaskConical,
   Github,
   Info,
-  Layers3,
   Link2,
-  LoaderCircle,
-  PanelLeft,
-  RefreshCw,
+  Plus,
   RotateCcw,
   ShieldCheck,
-  Sparkles,
-  TrendingUp,
+  SlidersHorizontal,
+  TrendingDown,
   Users,
   X,
 } from 'lucide-react';
-import {
-  Area,
-  CartesianGrid,
-  ComposedChart,
-  Line,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import { buildPlan, validate, type Interval, type Plan } from './model';
+import { buildPlan, validationErrors, type Inputs, type Interval, type Plan } from './model';
 import {
   emptyDraft,
+  essentialKeys,
   exampleDraft,
   exportCsv,
   formatDate,
@@ -46,116 +31,104 @@ import {
   scenarioUrl,
   type Draft,
 } from './scenario';
-import type { Simulation } from './simulation';
 
-const number = (n: number) => new Intl.NumberFormat('en').format(n);
-const pct = (n: number, digits = 2) => `${(n * 100).toFixed(digits)}%`;
-const pp = (n: number, digits = 2) => `${(n * 100).toFixed(digits)} pp`;
-const intervalText = (ci: Interval | null | undefined, difference = false) =>
-  ci
-    ? `${(ci[0] * 100).toFixed(2)} to ${(ci[1] * 100).toFixed(2)} ${difference ? 'pp' : '%'}`
-    : 'No mature labels';
+const ForecastChart = lazy(() => import('./ForecastChart'));
+const count = (value: number) => new Intl.NumberFormat('en').format(value);
+const dayUnit = (value: number) => (value === 1 ? 'day' : 'days');
+const percent = (value: number) => `${(value * 100).toFixed(2)}%`;
+const points = (value: number) => `${(value * 100).toFixed(2)} pp`;
+const interval = (value: Interval | null) =>
+  value ? `${(value[0] * 100).toFixed(2)} to ${(value[1] * 100).toFixed(2)}` : '—';
+const starter = restoreScenario(window.location.search);
 
 function Field({
   label,
+  hint,
+  error,
   suffix,
-  help,
+  value,
+  onChange,
+  onBlur,
+  type = 'number',
+  step = 'any',
+  placeholder,
+  optional = false,
   children,
 }: {
   label: string;
+  hint?: string;
+  error?: string;
   suffix?: string;
-  help?: string;
-  children: (id: string) => ReactNode;
+  value: string;
+  onChange: (value: string) => void;
+  onBlur: () => void;
+  type?: string;
+  step?: string;
+  placeholder?: string;
+  optional?: boolean;
+  children?: ReactNode;
 }) {
   const id = useId();
   return (
-    <div className="field">
+    <div className={`field${error ? ' field-invalid' : ''}`}>
       <label htmlFor={id}>
         {label}
-        {help && (
-          <span className="field-help" title={help}>
-            <CircleHelp size={13} aria-label={help} />
-          </span>
-        )}
+        {optional && <span>optional</span>}
       </label>
-      <div className="input-wrap">
-        {children(id)}
+      <div className={`input-wrap${suffix ? ' has-suffix' : ''}${children ? ' has-select' : ''}`}>
+        <input
+          id={id}
+          type={type}
+          step={type === 'number' ? step : undefined}
+          inputMode={type === 'number' ? 'decimal' : undefined}
+          placeholder={placeholder}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={onBlur}
+          aria-invalid={Boolean(error)}
+          aria-describedby={hint || error ? `${id}-description` : undefined}
+          required={!optional}
+          maxLength={type === 'text' ? 200 : undefined}
+        />
         {suffix && <span className="input-suffix">{suffix}</span>}
+        {children}
       </div>
-      {help && (
-        <span className="sr-only" id={`${id}-help`}>
-          {help}
-        </span>
+      {(hint || error) && (
+        <p className={error ? 'field-error' : 'field-hint'} id={`${id}-description`}>
+          {error ?? hint}
+        </p>
       )}
     </div>
   );
 }
 
-function StatCard({
-  title,
+function Metric({
+  label,
   value,
-  suffix,
+  unit,
   detail,
+  featured = false,
   icon,
-  tone = '',
 }: {
-  title: string;
+  label: string;
   value: string;
-  suffix?: string;
+  unit: string;
   detail: ReactNode;
+  featured?: boolean;
   icon: ReactNode;
-  tone?: string;
 }) {
   return (
-    <section className={`stat-card ${tone}`}>
-      <div className="stat-top">
-        <span>{title}</span>
-        <span className="stat-icon">{icon}</span>
+    <section className={`metric${featured ? ' metric-featured' : ''}`}>
+      <div className="metric-label">
+        {label}
+        {icon}
       </div>
-      <div className="stat-value">
+      <div className="metric-value">
         {value}
-        <span>{suffix}</span>
+        <span>{unit}</span>
       </div>
-      <div className="stat-detail">{detail}</div>
+      <div className="metric-detail">{detail}</div>
     </section>
-  );
-}
-
-function EmptyChart() {
-  return (
-    <div className="empty-chart">
-      <svg viewBox="0 0 800 230" aria-hidden="true" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="empty-gradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#d7e9e4" stopOpacity=".6" />
-            <stop offset="100%" stopColor="#eaf2ef" stopOpacity=".15" />
-          </linearGradient>
-        </defs>
-        {[40, 90, 140, 190].map((y) => (
-          <line key={y} x1="15" x2="785" y1={y} y2={y} stroke="#e9eeec" strokeDasharray="4 5" />
-        ))}
-        <path
-          d="M20 30 C130 60 130 75 230 81 S430 94 780 100 L780 133 C430 143 330 153 230 163 S130 185 20 215Z"
-          fill="url(#empty-gradient)"
-        />
-        <path d="M20 122 L780 116" stroke="#bccfc7" strokeWidth="2" strokeDasharray="5 6" />
-      </svg>
-      <div className="empty-chart-message">
-        <span className="empty-symbol">
-          <TrendingUp size={23} />
-        </span>
-        <strong>Your experiment, week by week</strong>
-        <p>
-          Enter your assumptions to see how precision
-          <br />
-          improves as credit outcomes mature.
-        </p>
-      </div>
-      <div className="empty-chart-axis">
-        <span>Experiment starts</span>
-        <span>Final readout</span>
-      </div>
-    </div>
   );
 }
 
@@ -164,1228 +137,729 @@ function Methodology() {
     <details id="methodology" className="methodology">
       <summary>
         <span>
-          <ShieldCheck size={17} /> Assumptions & methodology
+          <ShieldCheck size={17} /> How the calculation works
         </span>
         <ChevronDown size={17} />
       </summary>
-      <div className="method-content">
+      <div className="method-grid">
         <div>
-          <h3>A fixed final decision</h3>
+          <h3>Sample size</h3>
           <p>
-            Sample size uses an approximate two-sided z-test for independent proportions, with
-            pooled variance under the null and unpooled variance under the alternative. Power is
-            solved numerically and sample targets are rounded up.
+            A two-sided z-test for independent bad-loan proportions estimates the labeled sample
+            needed at your chosen power and confidence. The calculation uses pooled null variance
+            and unpooled alternative variance, solves numerically, and rounds targets up.
           </p>
           <p>
-            Individual bad-rate intervals use Wilson’s method; reduction intervals use Newcombe’s
-            method. Forecast intervals use expected, possibly fractional, bad counts. They
-            illustrate precision and are not observed results.
+            Positive reduction means control bad rate minus treatment bad rate. Relative percent and
+            percentage-point inputs are converted to the same treatment rate.
           </p>
         </div>
         <div>
-          <h3>Credit outcomes need time</h3>
+          <h3>Time until analysis</h3>
           <p>
-            Each funded cohort waits for the entire observation window plus reporting delay, even if
-            a bad event is known earlier. Coverage is the expected share with usable labels;
-            missingness must be unrelated to outcomes.
+            Daily funded loans are split between arms. Collection stops once both arms can supply
+            their required usable samples. Label coverage adjusts the funded-loan requirement;
+            collection is rounded up to whole calendar days.
           </p>
           <p>
-            Assumes independent borrowers with one analyzed loan each, stable traffic and bad rates,
-            and the same funding rate in both arms. This compares portfolio bad rates at fixed
-            lending volume; it does not isolate a score’s effect on the same funded borrowers.
-          </p>
-        </div>
-        <div>
-          <h3>Simulations are hypothetical</h3>
-          <p>
-            Traffic, funding, and coverage are deterministic expectations. One thousand seeded
-            binomial experiments simulate bad outcomes on new mature cohorts. Detection is a
-            two-sided z-test rejection in the beneficial direction at that week, not the chance of
-            having detected an effect at any earlier week.
-          </p>
-          <p>
-            Detection uncertainty is a 95% Wilson interval across simulation runs. It is Monte Carlo
-            error, separate from the experiment’s confidence interval. Early small samples and rare
-            events need extra care.
+            Every loan waits the full label delay, including observation and reporting. Total
+            duration is collection days plus label-delay days. The start date is optional; dates use
+            elapsed-day calendar arithmetic.
           </p>
         </div>
         <div>
-          <h3>Reference methods</h3>
+          <h3>Projected confidence intervals</h3>
+          <p>
+            Weekly usable sample sizes and assumed bad rates generate expected, potentially
+            fractional bad counts. Wilson intervals are used for each arm, and Newcombe intervals
+            for the reduction. These illustrate expected precision; they are not measured experiment
+            results or a guarantee of significance.
+          </p>
+          <p>
+            The final sample is designed for one planned final analysis. Weekly projections do not
+            provide an early-stopping rule.
+          </p>
+        </div>
+        <div>
+          <h3>Assumptions & references</h3>
+          <p>
+            Assumes independent borrowers with one analyzed loan each, stable daily volume and bad
+            rates, comparable funding rates across policies, and missing labels unrelated to
+            outcomes. Portfolio comparisons do not isolate a score’s effect on the same funded
+            borrowers.
+          </p>
           <p>
             <a
               href="https://www.statsmodels.org/stable/generated/statsmodels.stats.proportion.power_proportions_2indep.html"
               target="_blank"
               rel="noreferrer"
             >
-              Independent-proportions power <ArrowUpRight size={13} />
-            </a>
-            <br />
+              Power calculation <ArrowUpRight size={13} />
+            </a>{' '}
+            ·{' '}
             <a
               href="https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm"
               target="_blank"
               rel="noreferrer"
             >
-              Wilson confidence intervals <ArrowUpRight size={13} />
-            </a>
-            <br />
+              Wilson intervals <ArrowUpRight size={13} />
+            </a>{' '}
+            ·{' '}
             <a
               href="https://github.com/statsmodels/statsmodels/blob/main/statsmodels/stats/proportion.py"
               target="_blank"
               rel="noreferrer"
             >
-              Newcombe difference intervals <ArrowUpRight size={13} />
+              Newcombe intervals <ArrowUpRight size={13} />
             </a>
           </p>
-          <p>
-            Calculations run in your browser. No borrower records, accounts, or server-side storage
-            are used. Shared links include the assumptions you enter.
-          </p>
+          <p>All calculations run in your browser. Share links contain your entered assumptions.</p>
         </div>
       </div>
     </details>
   );
 }
 
-export default function App() {
-  const initial = useRef(restoreScenario(window.location.search));
-  const [draft, setDraft] = useState<Draft>(initial.current.draft);
-  const [plan, setPlan] = useState<Plan | null>(null);
-  const [simulation, setSimulation] = useState<Simulation | null>(null);
-  const [errors, setErrors] = useState<string[]>(
-    initial.current.error ? [initial.current.error] : [],
+function WeeklyTable({ plan }: { plan: Plan }) {
+  const [showDelay, setShowDelay] = useState(false);
+  const [page, setPage] = useState(0);
+  const weeks = plan.weeks.filter((week) => week.day > 0);
+  const delayed = weeks.filter((week) => !week.matureC && !week.matureT);
+  const rows = showDelay ? weeks : weeks.filter((week) => week.matureC || week.matureT);
+  const pages = Math.ceil(rows.length / 12);
+  return (
+    <section className="panel weekly-panel">
+      <div className="section-heading">
+        <div>
+          <h2>Week-by-week projection</h2>
+          <p>{plan.inputs.confidence}% intervals based on your assumed bad rates.</p>
+        </div>
+        <span className="small-label">C = control · T = treatment</span>
+      </div>
+      {delayed.length > 0 && (
+        <div className="delay-summary">
+          <Clock3 size={16} />
+          <span>
+            {delayed.length === 1
+              ? `Week ${delayed[0].week}`
+              : `Weeks ${delayed[0].week}–${delayed.at(-1)!.week}`}
+            : no usable labels expected yet.
+          </span>
+          <button
+            aria-pressed={showDelay}
+            onClick={() => {
+              setShowDelay((value) => !value);
+              setPage(0);
+            }}
+          >
+            {showDelay ? 'Hide these weeks' : 'Show these weeks'}
+          </button>
+        </div>
+      )}
+      <div
+        className="table-scroll"
+        role="region"
+        aria-label="Projected weekly confidence intervals"
+        tabIndex={0}
+      >
+        <table>
+          <thead>
+            <tr>
+              <th>Week</th>
+              <th>
+                Usable samples
+                <br />
+                <small>Control / treatment</small>
+              </th>
+              <th>
+                Control bad rate
+                <br />
+                <small>{plan.inputs.confidence}% CI · %</small>
+              </th>
+              <th>
+                Treatment bad rate
+                <br />
+                <small>{plan.inputs.confidence}% CI · %</small>
+              </th>
+              <th>
+                Bad-rate reduction
+                <br />
+                <small>{plan.inputs.confidence}% CI · pp</small>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(page * 12, page * 12 + 12).map((week) => (
+              <tr key={week.day} className={week.day === plan.finalDay ? 'final-row' : ''}>
+                <td>
+                  <strong>
+                    {week.day === plan.finalDay ? 'Final analysis' : `Week ${week.week}`}
+                  </strong>
+                  <small>
+                    Day {week.day}
+                    {week.date && ` · ${formatDate(week.date)}`}
+                  </small>
+                </td>
+                <td>
+                  {count(week.matureC)} / {count(week.matureT)}
+                </td>
+                <td>
+                  {week.expectedC ? (
+                    <>
+                      <strong>{percent(plan.pC)}</strong>
+                      <small>{interval(week.expectedC)}</small>
+                    </>
+                  ) : (
+                    <span className="unavailable">Not available yet</span>
+                  )}
+                </td>
+                <td>
+                  {week.expectedT ? (
+                    <>
+                      <strong>{percent(plan.pT)}</strong>
+                      <small>{interval(week.expectedT)}</small>
+                    </>
+                  ) : (
+                    <span className="unavailable">Not available yet</span>
+                  )}
+                </td>
+                <td>
+                  {week.expectedDifference ? (
+                    <>
+                      <strong>{points(plan.delta)}</strong>
+                      <small>{interval(week.expectedDifference)}</small>
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="table-footer">
+        <span>Projected values, not observed outcomes. CSV includes every week.</span>
+        {pages > 1 && (
+          <div>
+            <button onClick={() => setPage((value) => value - 1)} disabled={page === 0}>
+              Previous
+            </button>
+            <span>
+              {page + 1} / {pages}
+            </span>
+            <button onClick={() => setPage((value) => value + 1)} disabled={page >= pages - 1}>
+              Next
+            </button>
+          </div>
+        )}
+      </div>
+    </section>
   );
-  const [simError, setSimError] = useState('');
-  const [simulating, setSimulating] = useState(false);
-  const [mode, setMode] = useState<'forecast' | 'simulation'>('forecast');
-  const [tablePage, setTablePage] = useState(0);
+}
+
+export default function App() {
+  const [draft, setDraft] = useState<Draft>(starter.draft);
+  const [touched, setTouched] = useState<Partial<Record<keyof Inputs, boolean>>>({});
+  const [advancedOpen, setAdvancedOpen] = useState(
+    Boolean(
+      starter.draft.startDate ||
+      starter.draft.outcome ||
+      starter.draft.coverage !== '100' ||
+      starter.draft.treatmentShare !== '50',
+    ),
+  );
+  const [linkError, setLinkError] = useState(starter.error);
+  const [shareLink, setShareLink] = useState('');
   const [notice, setNotice] = useState('');
-  const [shareFallback, setShareFallback] = useState('');
-  const workerRef = useRef<Worker | null>(null);
-  const errorRef = useRef<HTMLDivElement>(null);
-
-  const calculate = (values: Draft, focus = true) => {
+  const calculation = useMemo(() => {
+    const inputs = parseDraft(draft);
+    const errors = validationErrors(inputs);
+    if (Object.keys(errors).length) return { inputs, errors, plan: null, failure: null };
     try {
-      const inputs = parseDraft(values);
-      const issues = validate(inputs);
-      if (issues.length) throw new Error(issues.join('\n'));
-      setPlan(buildPlan(inputs));
-      setErrors([]);
-      setMode('forecast');
-      setTablePage(0);
-      setShareFallback('');
+      return { inputs, errors, plan: buildPlan(inputs), failure: null };
     } catch (error) {
-      setPlan(null);
-      setSimulation(null);
-      setErrors((error instanceof Error ? error.message : 'Please check the inputs.').split('\n'));
-      if (focus) setTimeout(() => errorRef.current?.focus(), 0);
+      return {
+        inputs,
+        errors,
+        plan: null,
+        failure: error instanceof Error ? error.message : 'Please check your assumptions.',
+      };
     }
-  };
-
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('v') === '1')
-      calculate(initial.current.draft, false);
-    // Restore a shared scenario only on initial mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    setSimulation(null);
-    setSimError('');
-    if (!plan) {
-      setSimulating(false);
-      return;
-    }
-    setSimulating(true);
-    let worker: Worker;
-    try {
-      worker = new Worker(new URL('./simulation.worker.ts', import.meta.url), { type: 'module' });
-    } catch {
-      setSimError(
-        'The simulation worker could not start. Your planning forecast is still available.',
-      );
-      setSimulating(false);
-      return;
-    }
-    workerRef.current = worker;
-    const fail = () => {
-      setSimError(
-        'The simulation could not finish. Try running it again. Your planning forecast is still available.',
-      );
-      setSimulating(false);
-      worker.terminate();
-    };
-    const timeout = window.setTimeout(fail, 60_000);
-    worker.onmessage = (event) => {
-      clearTimeout(timeout);
-      if (event.data.ok) setSimulation(event.data.result);
-      else setSimError(event.data.error);
-      setSimulating(false);
-      worker.terminate();
-    };
-    worker.onerror = fail;
-    worker.postMessage(plan);
-    return () => {
-      clearTimeout(timeout);
-      worker.terminate();
-      workerRef.current = null;
-    };
-  }, [plan]);
-
+  }, [draft]);
+  const { plan, errors } = calculation;
+  const entered = essentialKeys.filter((key) => draft[key].trim()).length;
   useEffect(() => {
     if (notice) {
-      const timeout = setTimeout(() => setNotice(''), 4000);
-      return () => clearTimeout(timeout);
+      const timer = setTimeout(() => setNotice(''), 4000);
+      return () => clearTimeout(timer);
     }
   }, [notice]);
-
   const change = (key: keyof Draft, value: string) => {
     setDraft((previous) => ({ ...previous, [key]: value }));
-    setPlan(null);
-    setSimulation(null);
-    setErrors([]);
-    setShareFallback('');
+    setShareLink('');
+    setLinkError(null);
   };
-  const input = (
+  const fieldError = (key: keyof Inputs) =>
+    draft[key].trim() || touched[key] ? errors[key] : undefined;
+  const field = (
     key: keyof Draft,
-    placeholder: string,
-    suffix?: string,
-    help?: string,
-    label?: string,
-    step = 'any',
+    label: string,
+    options: {
+      hint?: string;
+      suffix?: string;
+      placeholder?: string;
+      type?: string;
+      optional?: boolean;
+      step?: string;
+      children?: ReactNode;
+    } = {},
   ) => (
-    <Field label={label ?? key} suffix={suffix} help={help}>
-      {(id) => (
-        <input
-          id={id}
-          type="number"
-          inputMode="decimal"
-          step={step}
-          placeholder={placeholder}
-          value={draft[key]}
-          onChange={(event) => change(key, event.target.value)}
-          aria-describedby={help ? `${id}-help` : undefined}
-          required
-        />
-      )}
-    </Field>
+    <Field
+      label={label}
+      value={draft[key]}
+      onChange={(value) => change(key, value)}
+      onBlur={() => setTouched((previous) => ({ ...previous, [key]: true }))}
+      error={fieldError(key)}
+      {...options}
+    />
   );
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    calculate(draft);
-  };
-  const loadExample = () => {
-    const example = exampleDraft();
-    setDraft(example);
-    calculate(example, false);
-    setNotice('Illustrative example loaded. Every assumption is editable.');
-  };
   const reset = () => {
     setDraft(emptyDraft());
-    setPlan(null);
-    setSimulation(null);
-    setErrors([]);
-    setShareFallback('');
+    setTouched({});
+    setLinkError(null);
+    setShareLink('');
+    setAdvancedOpen(false);
     window.history.replaceState(null, '', window.location.pathname);
   };
-  const share = async () => {
+  const loadExample = () => {
+    setDraft(exampleDraft());
+    setTouched({});
+    setLinkError(null);
+    setShareLink('');
+    setNotice('Illustrative example loaded. Change any value to recalculate.');
+  };
+  const share = () => {
     if (!plan) return;
     const url = scenarioUrl(plan.inputs, window.location.href);
-    setShareFallback(url);
-    try {
-      await navigator.clipboard.writeText(url);
-      setNotice('Scenario link copied. It includes your assumptions.');
-    } catch {
-      setShareFallback(url);
-    }
+    setShareLink(url);
+    if (navigator.clipboard)
+      void navigator.clipboard
+        .writeText(url)
+        .then(() => setNotice('Calculator link copied. It includes your assumptions.'))
+        .catch(() => {});
   };
   const download = () => {
     if (!plan) return;
     const url = URL.createObjectURL(
-      new Blob([exportCsv(plan, simulation)], { type: 'text/csv;charset=utf-8;' }),
+      new Blob([exportCsv(plan)], { type: 'text/csv;charset=utf-8;' }),
     );
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `creditlab-plan-${plan.inputs.startDate}.csv`;
+    anchor.download = `creditlab-calculation${plan.inputs.startDate ? `-${plan.inputs.startDate}` : ''}.csv`;
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setNotice(
-      simulation
-        ? 'Weekly results and assumptions exported.'
-        : 'Forecast exported. Simulated results were not available.',
-    );
+    setNotice('Assumptions and all weekly projections exported.');
   };
-  const rerun = () => {
-    if (!plan) return;
-    const seed = (plan.inputs.seed + 1) >>> 0;
-    setDraft((previous) => ({ ...previous, seed: String(seed) }));
-    setPlan({ ...plan, inputs: { ...plan.inputs, seed } });
-  };
-  const impliedRate =
-    draft.baseline && draft.effect
+  const target =
+    draft.baseline.trim() && draft.effect.trim() && !errors.baseline && !errors.effect
       ? draft.effectMode === 'relative'
         ? Number(draft.baseline) * (1 - Number(draft.effect) / 100)
         : Number(draft.baseline) - Number(draft.effect)
       : null;
-  const chartData = plan?.weeks.map((week, index) => {
-    const sim = simulation?.weeks[index];
-    const ci = mode === 'forecast' ? week.expectedDifference : sim?.interval;
-    return {
-      day: week.day,
-      effect: ci ? (mode === 'forecast' ? plan.delta : (sim?.difference ?? 0)) * 100 : null,
-      band: ci ? [ci[0] * 100, ci[1] * 100] : null,
-      mature: week.matureC + week.matureT,
-      enrolled: week.enrolledC + week.enrolledT,
-      pending: week.pending,
-      detection:
-        sim?.detection === null || sim?.detection === undefined ? null : sim.detection * 100,
-    };
-  });
-  const finalSim = simulation?.weeks.at(-1);
-  const displayWeeks = plan?.weeks.slice(tablePage * 12, tablePage * 12 + 12) ?? [];
-  const totalPages = Math.ceil((plan?.weeks.length ?? 0) / 12);
+  const advancedErrors = Boolean(
+    errors.coverage || errors.treatmentShare || errors.startDate || errors.outcome,
+  );
 
   return (
     <>
-      <a className="skip-link" href="#planner">
-        Skip to planner
+      <a className="skip-link" href="#calculator">
+        Skip to calculator
       </a>
-      <header className="header">
+      <header className="site-header">
         <div className="header-inner">
           <a className="brand" href={window.location.pathname} aria-label="CreditLab home">
             <span className="brand-mark">
-              <BarChart3 size={22} strokeWidth={2.6} />
+              <BarChart3 size={22} />
             </span>
             <span>
-              Credit<span className="brand-light">Lab</span>
+              Credit<span>Lab</span>
             </span>
-            <span className="brand-beta">PLANNER</span>
+            <span className="brand-tag">CALCULATOR</span>
           </a>
           <nav aria-label="Main navigation">
-            <a className="nav-active" href="#planner">
-              Experiment planner
+            <a href="#methodology">How it works</a>
+            <a
+              href="https://github.com/argyadiva/credit-ab-planner"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="View source on GitHub"
+            >
+              <Github size={18} />
+              <span>View source</span>
             </a>
-            <a href="#methodology">Methodology</a>
           </nav>
-          <a
-            className="github-link"
-            href="https://github.com/argyadiva/credit-ab-planner"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <Github size={17} />
-            <span>View source</span>
-            <ArrowUpRight size={14} />
-          </a>
         </div>
       </header>
-      <main id="planner" className="shell">
-        <div className="breadcrumb">
-          <span>Workspace</span>
-          <span>/</span>
-          <span>Experiment design</span>
-        </div>
+      <main className="shell" id="calculator">
         <div className="page-heading">
-          <div>
-            <div className="eyebrow">
-              <span /> BUILT FOR CREDIT EXPERIMENTS
-            </div>
-            <h1>A better plan for your next A/B test.</h1>
-            <p>Size your experiment. Account for label lag. Know when you can decide.</p>
-          </div>
-          <div className="heading-note">
-            <ShieldCheck size={17} />
-            <span>
-              Two-sided test
-              <br />
-              <strong>One planned final decision</strong>
-            </span>
-          </div>
+          <div className="eyebrow">CREDIT SCORE A/B TESTING</div>
+          <h1>
+            How many loans.
+            <br className="mobile-break" /> How long to wait.
+          </h1>
+          <p>
+            Enter your assumptions to calculate the sample size, timeline,
+            <br className="desktop-break" /> and projected weekly confidence intervals for your
+            test.
+          </p>
         </div>
-        <div className="workspace-grid">
-          <aside className="assumptions-panel">
-            <form onSubmit={submit} noValidate>
-              <div className="panel-heading">
-                <div>
-                  <SlidersIcon />
-                  <h2>Experiment setup</h2>
-                </div>
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={reset}
-                  title="Reset all inputs"
-                  aria-label="Reset all inputs"
-                >
-                  <RotateCcw size={16} />
-                </button>
+        <div className="calculator-grid">
+          <section className="panel input-panel" aria-labelledby="inputs-heading">
+            <div className="input-heading">
+              <h2 id="inputs-heading">
+                <Calculator size={18} /> Your assumptions
+              </h2>
+              <button
+                className="icon-button"
+                onClick={reset}
+                aria-label="Reset all inputs"
+                title="Reset all inputs"
+              >
+                <RotateCcw size={16} />
+              </button>
+            </div>
+            <p className="input-intro">
+              Six inputs. Results update as you type.
+              <br />
+              <button className="text-button" onClick={loadExample}>
+                Try an example
+              </button>{' '}
+              to see how it works.
+            </p>
+            <form onSubmit={(event) => event.preventDefault()} noValidate>
+              {field('baseline', 'Baseline bad-loan rate', {
+                suffix: '%',
+                placeholder: 'e.g. 10',
+                hint: 'The current bad-loan rate among funded loans.',
+              })}
+              {field('effect', 'Expected bad-rate reduction', {
+                placeholder: draft.effectMode === 'relative' ? 'e.g. 10' : 'e.g. 1',
+                children: (
+                  <>
+                    <select
+                      aria-label="Reduction input mode"
+                      value={draft.effectMode}
+                      onChange={(event) => change('effectMode', event.target.value)}
+                    >
+                      <option value="relative">Relative %</option>
+                      <option value="absolute">Points (pp)</option>
+                    </select>
+                    <ChevronDown className="select-chevron" size={14} />
+                  </>
+                ),
+              })}
+              <div className="target-preview">
+                <TrendingDown size={16} />
+                <span>Expected treatment bad rate</span>
+                <strong>{target === null ? '—' : `${target.toFixed(2)}%`}</strong>
               </div>
-              <div className="setup-intro">
-                Start with your assumptions, or{' '}
-                <button type="button" onClick={loadExample}>
-                  try an example
-                </button>
-                .
+              <div className="field-row">
+                {field('power', 'Statistical power', {
+                  suffix: '%',
+                  placeholder: 'e.g. 80',
+                  hint: 'Chance of detecting the assumed effect.',
+                })}
+                {field('confidence', 'Confidence level', {
+                  suffix: '%',
+                  placeholder: 'e.g. 95',
+                  hint: 'For a two-sided test.',
+                })}
               </div>
-              <section className="form-section">
-                <h3>
-                  <FlaskConical size={15} /> Outcome & effect
-                </h3>
-                {input(
-                  'baseline',
-                  'e.g. 10',
-                  '%',
-                  'Bad outcomes divided by all mature, usable funded loans in the control arm.',
-                  'Baseline bad-loan rate',
-                )}
-                <Field label="Expected reduction">
-                  {(id) => (
-                    <>
-                      <input
-                        id={id}
-                        type="number"
-                        inputMode="decimal"
-                        step="any"
-                        placeholder={draft.effectMode === 'relative' ? 'e.g. 10' : 'e.g. 1'}
-                        value={draft.effect}
-                        onChange={(event) => change('effect', event.target.value)}
-                        required
-                      />
-                      <select
-                        aria-label="Reduction input mode"
-                        value={draft.effectMode}
-                        onChange={(event) => change('effectMode', event.target.value)}
-                      >
-                        <option value="relative">Relative %</option>
-                        <option value="absolute">Points (pp)</option>
-                      </select>
-                      <ChevronDown className="select-chevron" size={13} />
-                    </>
-                  )}
-                </Field>
-                <div
-                  className={`implied-rate ${impliedRate !== null && (impliedRate <= 0 || impliedRate >= Number(draft.baseline)) ? 'invalid' : ''}`}
-                >
-                  <TrendingUp size={14} />
-                  <span>Expected treatment rate</span>
-                  <strong>
-                    {impliedRate !== null && Number.isFinite(impliedRate)
-                      ? `${impliedRate.toFixed(2)}%`
-                      : '—'}
-                  </strong>
-                </div>
-                <div className="field-row">
-                  {input(
-                    'power',
-                    'e.g. 80',
-                    '%',
-                    'Probability of detecting the assumed effect at the final analysis, under this model.',
-                    'Statistical power',
-                  )}
-                  {input(
-                    'confidence',
-                    'e.g. 95',
-                    '%',
-                    'Two-sided confidence level. Significance level is 100% minus this value.',
-                    'Confidence level',
-                  )}
-                </div>
-              </section>
-              <section className="form-section">
-                <h3>
-                  <Users size={15} /> Traffic & allocation
-                </h3>
-                {input(
-                  'dailyApplicants',
-                  'e.g. 1,000',
-                  '/ day',
-                  'Eligible unique applicants entering the experiment across both arms, averaged over calendar days.',
-                  'Daily eligible applicants',
-                )}
-                <div className="field-row">
-                  {input(
-                    'funding',
-                    'e.g. 50',
-                    '%',
-                    'Share of eligible applicants who receive a funded loan. The same rate applies to both arms.',
-                    'Funding rate',
-                  )}
-                  {input(
-                    'treatmentShare',
-                    'e.g. 50',
-                    '%',
-                    'Share of applicants assigned to treatment. The remainder enters control.',
-                    'Treatment allocation',
-                  )}
-                </div>
-                <div className="allocation-note">
-                  <span className="key-dot control" /> Control{' '}
-                  {draft.treatmentShare &&
-                  Number(draft.treatmentShare) > 0 &&
-                  Number(draft.treatmentShare) < 100
-                    ? `${100 - Number(draft.treatmentShare)}%`
-                    : '—'}
-                  <span className="key-dot treatment" /> Treatment{' '}
-                  {draft.treatmentShare ? `${draft.treatmentShare}%` : '—'}
-                </div>
-              </section>
-              <section className="form-section">
-                <h3>
-                  <Clock3 size={15} /> Delayed outcomes <span className="tiny-tag">CREDIT</span>
-                </h3>
-                <div className="field-row">
-                  {input(
-                    'observationDays',
-                    'e.g. 90',
-                    'days',
-                    'Full observation window from disbursement, before a loan can be classified as good or bad.',
-                    'Observation window',
-                    '1',
-                  )}
-                  {input(
-                    'reportingDays',
-                    'e.g. 7',
-                    'days',
-                    'Additional delay after the observation window before the final label is available.',
-                    'Reporting delay',
-                    '1',
-                  )}
-                </div>
-                {input(
-                  'coverage',
-                  'e.g. 100',
-                  '%',
-                  'Expected fraction of funded loans with usable final labels. Assumes outcome-independent missingness.',
-                  'Eventual label coverage',
-                )}
-                <div className="lag-note">
-                  <Info size={15} />
+              {field('dailyLoans', 'Funded loans per day', {
+                suffix: '/ day',
+                placeholder: 'e.g. 500',
+                hint: 'Total across control and treatment, per calendar day.',
+              })}
+              {field('labelLagDays', 'Total label delay', {
+                suffix: 'days',
+                placeholder: 'e.g. 97',
+                step: '1',
+                hint: 'Days from funding to a usable outcome, including observation and reporting. Enter 0 for immediate labels.',
+              })}
+              <details
+                className="advanced"
+                open={advancedOpen}
+                onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+              >
+                <summary>
                   <span>
-                    A loan counts toward your sample only after its full observation window and
-                    reporting delay.
+                    <SlidersHorizontal size={16} /> Advanced settings
                   </span>
+                  <span>
+                    {advancedErrors ? 'Check inputs' : 'Optional'}
+                    <ChevronDown size={15} />
+                  </span>
+                </summary>
+                <div className="advanced-body">
+                  <div className="field-row">
+                    {field('treatmentShare', 'Treatment allocation', {
+                      suffix: '%',
+                      hint: 'Control gets the remaining share.',
+                    })}
+                    {field('coverage', 'Usable label coverage', {
+                      suffix: '%',
+                      hint: 'Expected share with a final usable label.',
+                    })}
+                  </div>
+                  {field('startDate', 'Start date', {
+                    type: 'date',
+                    optional: true,
+                    hint: 'Add a date to see calendar milestones.',
+                  })}
+                  {field('outcome', 'Bad-outcome description', {
+                    type: 'text',
+                    optional: true,
+                    placeholder: 'e.g. 30+ DPD within 90 days',
+                  })}
                 </div>
-              </section>
-              <section className="form-section last-section">
-                <h3>
-                  <CalendarDays size={15} /> Plan details
-                </h3>
-                <Field label="Experiment start date">
-                  {(id) => (
-                    <input
-                      id={id}
-                      type="date"
-                      value={draft.startDate}
-                      onChange={(event) => change('startDate', event.target.value)}
-                      required
-                    />
-                  )}
-                </Field>
-                <Field
-                  label="Bad-outcome definition"
-                  help="Keep the description consistent with the observation window above."
-                >
-                  {(id) => (
-                    <textarea
-                      id={id}
-                      rows={2}
-                      maxLength={200}
-                      placeholder="e.g. 30+ DPD within 90 days"
-                      value={draft.outcome}
-                      onChange={(event) => change('outcome', event.target.value)}
-                      required
-                    />
-                  )}
-                </Field>
-                <details className="advanced">
-                  <summary>
-                    Simulation settings <ChevronDown size={13} />
-                  </summary>
-                  {input(
-                    'seed',
-                    '42',
-                    undefined,
-                    'The same inputs and seed reproduce the same 1,000 simulated experiments.',
-                    'Random seed',
-                    '1',
-                  )}
-                </details>
-              </section>
-              {errors.length > 0 && (
-                <div className="errors" role="alert" tabIndex={-1} ref={errorRef}>
-                  <strong>Check your assumptions</strong>
-                  <ul>
-                    {errors.map((error) => (
-                      <li key={error}>{error}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <div className="calculate-wrap">
-                <button type="submit" className="primary-button">
-                  <FlaskConical size={17} /> Calculate experiment
-                </button>
-                <span>
-                  <ShieldCheck size={12} /> Calculated privately in your browser
-                </span>
-              </div>
+              </details>
             </form>
-          </aside>
-          <div className="results" aria-live="polite" aria-busy={simulating}>
+            <div className="input-footnote">
+              <ShieldCheck size={14} />
+              <span>Calculated in your browser from your assumptions.</span>
+            </div>
+          </section>
+          <div className="results" aria-label="Calculator results">
             <div className="results-heading">
-              <div>
-                <h2>Your experiment plan</h2>
-                <span>
-                  {plan
-                    ? `${plan.inputs.confidence}% confidence · ${plan.inputs.power}% target power`
-                    : 'Your results will appear here'}
-                </span>
-              </div>
-              <div className="actions">
-                <button onClick={share} disabled={!plan} className="secondary-button">
+              <h2>Your calculation</h2>
+              <div className="result-actions">
+                <button onClick={share} disabled={!plan}>
                   <Link2 size={15} />
                   <span>Share</span>
                 </button>
-                <button onClick={download} disabled={!plan} className="secondary-button">
+                <button onClick={download} disabled={!plan}>
                   <Download size={15} />
                   <span>Export CSV</span>
                 </button>
               </div>
             </div>
-            {shareFallback && (
-              <div className="share-fallback">
-                <label htmlFor="share-url">Copy this scenario link</label>
+            {linkError && (
+              <div className="message warning" role="alert">
+                <Info size={17} />
+                <span>{linkError}</span>
+              </div>
+            )}
+            {shareLink && (
+              <div className="share-box">
+                <label htmlFor="share-url">Copy this calculator link</label>
                 <input
                   id="share-url"
+                  value={shareLink}
                   readOnly
-                  value={shareFallback}
                   onFocus={(event) => event.target.select()}
                 />
               </div>
             )}
-            <div className="stats-grid">
-              <StatCard
-                title="Required labeled sample"
-                value={plan ? number(plan.targetC + plan.targetT) : '—'}
-                suffix={plan ? 'loans' : ''}
-                detail={
-                  plan ? (
-                    <>
-                      {number(plan.targetC)} control · {number(plan.targetT)} treatment
-                    </>
-                  ) : (
-                    'Mature, usable outcomes across both arms'
-                  )
-                }
-                icon={<Users size={17} />}
-              />
-              <StatCard
-                title="Enrollment duration"
-                value={plan ? number(plan.enrollmentDays) : '—'}
-                suffix={plan ? 'days' : ''}
-                detail={
-                  plan ? (
-                    <>Enrollment ends {formatDate(plan.enrollmentDate)}</>
-                  ) : (
-                    'Time to enroll enough funded loans'
-                  )
-                }
-                icon={<CalendarDays size={17} />}
-              />
-              <StatCard
-                title="Time to final readout"
-                value={plan ? number(plan.finalDay) : '—'}
-                suffix={plan ? 'days' : ''}
-                detail={
-                  plan ? (
-                    <>
-                      {formatDate(plan.finalDate)} · includes {plan.lagDays}d lag
-                    </>
-                  ) : (
-                    'Enrollment + outcome maturity + reporting'
-                  )
-                }
-                icon={<Clock3 size={17} />}
-                tone="featured"
-              />
+            <div className="calculation-status" role="status" aria-live="polite">
+              <span className={`status-indicator${plan ? ' ready' : ''}`} />
+              {plan
+                ? `Calculated for ${draft.confidence}% confidence and ${draft.power}% power`
+                : Object.keys(errors).some((key) => Boolean(draft[key as keyof Draft].trim())) &&
+                    entered === essentialKeys.length
+                  ? 'Check the highlighted assumptions to calculate your results.'
+                  : `${entered} of 6 essential inputs entered`}
             </div>
-            <section className="card confidence-card">
-              <div className="card-heading">
-                <div>
-                  <h2>Precision, as your experiment matures</h2>
-                  <p>
-                    {plan
-                      ? `${plan.inputs.confidence}% confidence interval for the bad-rate reduction`
-                      : 'See how the confidence interval changes each week'}
-                  </p>
+            {plan ? (
+              <>
+                <div className="metrics-grid">
+                  <Metric
+                    label="Required labeled sample"
+                    value={count(plan.targetC + plan.targetT)}
+                    unit="loans"
+                    detail={
+                      <>
+                        <strong>{count(plan.targetC)}</strong> control ·{' '}
+                        <strong>{count(plan.targetT)}</strong> treatment
+                      </>
+                    }
+                    icon={<Users size={18} />}
+                    featured
+                  />
+                  <Metric
+                    label="Sample collection"
+                    value={count(plan.enrollmentDays)}
+                    unit={dayUnit(plan.enrollmentDays)}
+                    detail={
+                      plan.enrollmentDate ? (
+                        <>Until {formatDate(plan.enrollmentDate)}</>
+                      ) : (
+                        'To fund the required sample'
+                      )
+                    }
+                    icon={<CalendarDays size={18} />}
+                  />
                 </div>
-                <span className="card-label">
-                  <Activity size={13} /> WEEKLY OUTLOOK
-                </span>
-              </div>
-              <div className="chart-controls">
-                <div className="segmented" role="group" aria-label="Confidence interval view">
-                  <button aria-pressed={mode === 'forecast'} onClick={() => setMode('forecast')}>
-                    Expected forecast
-                  </button>
-                  <button
-                    aria-pressed={mode === 'simulation'}
-                    onClick={() => setMode('simulation')}
-                    disabled={!simulation}
+                <section className="duration-card">
+                  <div className="duration-top">
+                    <div>
+                      <span className="small-label">TOTAL TIME UNTIL ANALYSIS</span>
+                      <h2>
+                        {count(plan.finalDay)} <span>{dayUnit(plan.finalDay)}</span>
+                      </h2>
+                      {plan.finalDate && <p>{formatDate(plan.finalDate)}</p>}
+                    </div>
+                    <Clock3 size={30} strokeWidth={1.3} />
+                  </div>
+                  <div
+                    className="duration-equation"
+                    aria-label={`${plan.enrollmentDays} collection ${dayUnit(plan.enrollmentDays)} plus ${plan.lagDays} label-delay ${dayUnit(plan.lagDays)} equals ${plan.finalDay} total ${dayUnit(plan.finalDay)}`}
                   >
-                    Simulated path
-                  </button>
-                </div>
-                <span className="chart-key">
-                  <span className="key-dot treatment" />
-                  {plan ? `${plan.inputs.confidence}% interval` : 'Confidence interval'}
-                </span>
-              </div>
-              {plan ? (
-                <>
-                  <div className="chart-axis-label">
-                    Bad-rate reduction (percentage points) · positive is better
-                  </div>
-                  <div className="chart-container">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart
-                        data={chartData}
-                        margin={{ top: 12, right: 22, left: 0, bottom: 0 }}
-                      >
-                        <defs>
-                          <linearGradient id="interval-fill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#42a98e" stopOpacity={0.26} />
-                            <stop offset="100%" stopColor="#42a98e" stopOpacity={0.07} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#e5ece9" />
-                        <XAxis
-                          dataKey="day"
-                          type="number"
-                          domain={[0, plan.finalDay]}
-                          tickFormatter={(day) => `${Math.round(day / 7)}w`}
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fontSize: 12, fill: '#76867f' }}
-                          minTickGap={30}
-                        />
-                        <YAxis
-                          tickFormatter={(value) => `${Number(value).toFixed(1)}`}
-                          tickLine={false}
-                          axisLine={false}
-                          width={47}
-                          tick={{ fontSize: 12, fill: '#76867f' }}
-                        />
-                        <Tooltip
-                          labelFormatter={(day) =>
-                            `Day ${day} · Week ${(Number(day) / 7).toFixed(1)}`
-                          }
-                          formatter={(value, name) =>
-                            name === 'band'
-                              ? [
-                                  Array.isArray(value)
-                                    ? `${Number(value[0]).toFixed(2)} to ${Number(value[1]).toFixed(2)} pp`
-                                    : value,
-                                  'Confidence interval',
-                                ]
-                              : [`${Number(value).toFixed(2)} pp`, 'Bad-rate reduction']
-                          }
-                          contentStyle={{
-                            borderRadius: 10,
-                            border: '1px solid #dbe5df',
-                            fontSize: 13,
-                          }}
-                        />
-                        <ReferenceLine y={0} stroke="#95a69d" strokeDasharray="5 4" />
-                        <ReferenceLine
-                          x={plan.enrollmentDays}
-                          stroke="#b4c3bc"
-                          strokeDasharray="3 4"
-                        />
-                        <Area
-                          dataKey="band"
-                          type="linear"
-                          stroke="none"
-                          fill="url(#interval-fill)"
-                          isAnimationActive={false}
-                          connectNulls={false}
-                        />
-                        <Line
-                          dataKey="effect"
-                          type="linear"
-                          stroke={mode === 'forecast' ? '#24876e' : '#7561b0'}
-                          strokeWidth={2.5}
-                          dot={false}
-                          activeDot={{ r: 4 }}
-                          isAnimationActive={false}
-                          connectNulls={false}
-                        />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="chart-footnote">
-                    <Info size={14} />
                     <span>
-                      {mode === 'forecast'
-                        ? 'Illustrative precision centered on your assumed effect; actual estimates will vary.'
-                        : `One hypothetical experiment · seed ${plan.inputs.seed}. Re-run to see another path.`}
+                      <strong>
+                        {count(plan.enrollmentDays)} {dayUnit(plan.enrollmentDays)}
+                      </strong>
+                      sample collection
                     </span>
-                    {mode === 'simulation' && (
-                      <button onClick={rerun} className="text-button" disabled={simulating}>
-                        <RefreshCw size={13} /> Re-run
-                      </button>
-                    )}
+                    <Plus size={16} />
+                    <span>
+                      <strong>
+                        {count(plan.lagDays)} {dayUnit(plan.lagDays)}
+                      </strong>
+                      label delay
+                    </span>
+                    <span className="equals">=</span>
+                    <span>
+                      <strong>
+                        {count(plan.finalDay)} {dayUnit(plan.finalDay)}
+                      </strong>
+                      total duration
+                    </span>
                   </div>
-                </>
-              ) : (
-                <EmptyChart />
-              )}
-            </section>
-            <div className="context-note">
-              <Info size={17} />
-              <p>
-                <strong>A weekly view, one final decision.</strong> Confidence intervals show
-                expected precision, not permission to stop early. Make your planned decision after
-                the required sample has matured.
-              </p>
-            </div>
-            {plan && (
-              <div className="scenario-summary">
-                <span className="summary-icon">
-                  <FlaskConical size={17} />
-                </span>
-                <div>
-                  <strong>{plan.inputs.outcome}</strong>
+                </section>
+                <div className="assumption-strip">
+                  <Info size={15} />
                   <p>
-                    {pct(plan.pC)} control → {pct(plan.pT)} treatment · {pp(plan.delta)} expected
-                    reduction
+                    Assumes {100 - plan.inputs.treatmentShare}% control /{' '}
+                    {plan.inputs.treatmentShare}% treatment and {plan.inputs.coverage}% usable
+                    labels.
+                    {plan.inputs.coverage < 100 &&
+                      ` Funded target: ${count(plan.fundedC)} control / ${count(plan.fundedT)} treatment.`}
                   </p>
                 </div>
-                <span className="scenario-badge">PLANNING SCENARIO</span>
-              </div>
-            )}
-            <div className="lower-grid">
-              <section className="card volume-card">
-                <div className="card-heading">
-                  <div>
-                    <h2>Enrolled ≠ ready to analyze</h2>
-                    <p>Follow the gap created by delayed labels</p>
-                  </div>
-                  <Layers3 size={18} className="muted" />
-                </div>
-                {plan ? (
-                  <>
-                    <div className="volume-legend">
-                      <span>
-                        <i className="key-dot control" /> Enrolled
-                      </span>
-                      <span>
-                        <i className="key-dot treatment" /> Mature & usable
-                      </span>
-                    </div>
-                    <div className="small-chart">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart
-                          data={chartData}
-                          margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
-                        >
-                          <CartesianGrid vertical={false} strokeDasharray="3 5" stroke="#e5ece9" />
-                          <XAxis
-                            dataKey="day"
-                            type="number"
-                            domain={[0, plan.finalDay]}
-                            tickFormatter={(day) => `${Math.round(day / 7)}w`}
-                            tickLine={false}
-                            axisLine={false}
-                            minTickGap={25}
-                            tick={{ fontSize: 12 }}
-                          />
-                          <YAxis
-                            width={45}
-                            tickFormatter={(value) =>
-                              value >= 1000 ? `${(value / 1000).toFixed(0)}k` : String(value)
-                            }
-                            tickLine={false}
-                            axisLine={false}
-                            tick={{ fontSize: 12 }}
-                          />
-                          <Tooltip
-                            labelFormatter={(day) => `Day ${day}`}
-                            formatter={(value, name) => [
-                              number(Number(value)),
-                              name === 'enrolled' ? 'Enrolled' : 'Mature & usable',
-                            ]}
-                            contentStyle={{ borderRadius: 10, fontSize: 13 }}
-                          />
-                          <Area
-                            type="linear"
-                            dataKey="enrolled"
-                            stroke="#8499a1"
-                            fill="#eef2f4"
-                            strokeWidth={2}
-                            isAnimationActive={false}
-                          />
-                          <Area
-                            type="linear"
-                            dataKey="mature"
-                            stroke="#24876e"
-                            fill="#daf0e6"
-                            strokeWidth={2}
-                            isAnimationActive={false}
-                          />
-                        </ComposedChart>
-                      </ResponsiveContainer>
-                    </div>
-                    <p className="card-bottom">
-                      Funded target: {number(plan.fundedC)} control / {number(plan.fundedT)}{' '}
-                      treatment.
-                      <br />
-                      {number(plan.weeks.at(-1)!.enrolledC + plan.weeks.at(-1)!.enrolledT)} enrolled
-                      after whole-day rounding · {plan.inputs.coverage}% usable labels.
-                    </p>
-                  </>
-                ) : (
-                  <div className="small-empty">
-                    <div className="cohort-illustration">
-                      <span />
-                      <span />
-                      <span />
-                      <span />
-                      <span />
-                    </div>
-                    <strong>Enrollment is only the first step</strong>
-                    <p>
-                      Loans must mature before their outcomes
-                      <br />
-                      can contribute to your analysis.
-                    </p>
+                {plan.inputs.outcome && (
+                  <div className="outcome-description">
+                    Outcome: <strong>{plan.inputs.outcome}</strong>
                   </div>
                 )}
-              </section>
-              <section className="card timeline-card">
-                <div className="card-heading">
-                  <div>
-                    <h2>Your path to a decision</h2>
-                    <p>Three milestones to plan around</p>
+                <section className="panel chart-panel">
+                  <div className="section-heading">
+                    <div>
+                      <h2>Projected weekly confidence intervals</h2>
+                      <p>How precision changes as more loan outcomes become usable.</p>
+                    </div>
                   </div>
-                  <CalendarDays size={18} className="muted" />
-                </div>
-                <ol className="timeline">
-                  <li>
-                    <span className="timeline-dot">
-                      <span />
+                  <div className="chart-meta">
+                    <span>Bad-rate reduction · percentage points</span>
+                    <span>
+                      <i />
+                      {plan.inputs.confidence}% interval
                     </span>
-                    <div>
-                      <span>Experiment begins</span>
-                      <strong>{plan ? formatDate(plan.inputs.startDate) : 'Start date'}</strong>
-                      <small>Random assignment to control and treatment</small>
-                    </div>
-                  </li>
-                  <li>
-                    <span className="timeline-dot">
-                      <span />
-                    </span>
-                    <div>
-                      <span>Enrollment closes</span>
-                      <strong>
-                        {plan ? formatDate(plan.enrollmentDate) : 'After sample collection'}
-                      </strong>
-                      <small>
-                        {plan
-                          ? `${number(plan.enrollmentDays)} days of funded cohorts`
-                          : 'Both arms reach their enrollment target'}
-                      </small>
-                    </div>
-                  </li>
-                  <li>
-                    <span className="timeline-dot final">
-                      <Check size={11} />
-                    </span>
-                    <div>
-                      <span>Final analysis</span>
-                      <strong>{plan ? formatDate(plan.finalDate) : 'After labels mature'}</strong>
-                      <small>
-                        {plan
-                          ? `${plan.lagDays} additional days after enrollment`
-                          : 'Full observation window + reporting delay'}
-                      </small>
-                    </div>
-                  </li>
-                </ol>
-              </section>
-            </div>
-            <section className="card simulation-card">
-              <div className="simulation-copy">
-                <span className="simulation-icon">
-                  <Sparkles size={20} />
-                </span>
-                <div>
-                  <h2>A thousand ways it could play out.</h2>
-                  <p>
-                    {plan
-                      ? 'Detection at the final readout, across 1,000 hypothetical experiments.'
-                      : 'Simulate random outcomes to see how often your planned effect is detected.'}
-                  </p>
-                </div>
-              </div>
-              {simulating ? (
-                <div className="simulation-status">
-                  <LoaderCircle size={17} className="spin" /> Simulating 1,000 experiments…
-                </div>
-              ) : finalSim?.detection !== null && finalSim?.detection !== undefined ? (
-                <div className="detection-result">
-                  <strong>{pct(finalSim.detection, 1)}</strong>
-                  <span>
-                    detect an improvement
-                    <br />
-                    <small>
-                      95% Monte Carlo interval: {intervalText(finalSim.detectionInterval)}
-                    </small>
-                  </span>
-                  <button
-                    className="icon-button"
-                    onClick={rerun}
-                    title="Run with the next seed"
-                    aria-label="Run simulations with the next seed"
+                  </div>
+                  <Suspense
+                    fallback={<div className="chart-loading">Preparing the projection…</div>}
                   >
-                    <RefreshCw size={16} />
+                    <ForecastChart plan={plan} />
+                  </Suspense>
+                  <div className="chart-note">
+                    <Info size={15} />
+                    <p>
+                      Centered on your assumed reduction of <strong>{points(plan.delta)}</strong>.
+                      Positive values mean fewer bad loans. Actual experiment estimates will vary.
+                    </p>
+                  </div>
+                </section>
+              </>
+            ) : (
+              <section
+                className={`panel empty-results${calculation.failure ? ' has-failure' : ''}`}
+              >
+                <span className="empty-icon">
+                  {calculation.failure ? (
+                    <Info size={30} />
+                  ) : (
+                    <Calculator size={30} strokeWidth={1.5} />
+                  )}
+                </span>
+                <h2>
+                  {calculation.failure
+                    ? 'This scenario needs an adjustment'
+                    : entered === essentialKeys.length
+                      ? 'Check your assumptions.'
+                      : 'A clear answer starts with six inputs.'}
+                </h2>
+                <p>
+                  {calculation.failure ??
+                    (entered === essentialKeys.length
+                      ? 'Correct the highlighted assumptions. The sample size and timeline will update automatically.'
+                      : 'Enter your baseline, expected reduction, power, confidence, daily loans, and label delay.')}
+                </p>
+                {!calculation.failure && (
+                  <button className="example-button" onClick={loadExample}>
+                    Try an example
                   </button>
+                )}
+                <div className="empty-outputs">
+                  <span>
+                    <Users size={17} /> Sample size
+                  </span>
+                  <span>
+                    <Clock3 size={17} /> Total duration
+                  </span>
+                  <span>
+                    <BarChart3 size={17} /> Weekly intervals
+                  </span>
                 </div>
-              ) : (
-                <span className="simulation-placeholder">
-                  {simError ? 'Simulation unavailable' : 'Ready when you are'}
-                </span>
-              )}
-            </section>
-            {simError && (
-              <div className="warning" role="alert">
-                <Info size={16} />
-                <span>
-                  {simError}{' '}
-                  <button className="text-button" onClick={() => plan && setPlan({ ...plan })}>
-                    Retry simulations
-                  </button>
-                </span>
-              </div>
+              </section>
             )}
             {plan?.warnings.map((warning) => (
-              <div className="warning" key={warning}>
-                <Info size={16} />
+              <div className="message warning" key={warning}>
+                <Info size={17} />
                 <span>{warning}</span>
               </div>
             ))}
-            <section className="card weekly-card">
-              <div className="card-heading">
-                <div>
-                  <h2>Weekly readout</h2>
-                  <p>
-                    {plan
-                      ? `${mode === 'forecast' ? 'Expected forecast' : 'Selected simulated path'} · rates and intervals use mature labels only`
-                      : 'Sample maturity and confidence intervals, together'}
-                  </p>
-                </div>
-                <span className="card-label">
-                  <PanelLeft size={13} /> DETAIL VIEW
-                </span>
-              </div>
-              {plan ? (
-                <>
-                  <div
-                    className="table-scroll"
-                    role="region"
-                    aria-label="Weekly experiment results"
-                    tabIndex={0}
-                  >
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Week / date</th>
-                          <th>
-                            Enrolled
-                            <br />
-                            <small>C / T</small>
-                          </th>
-                          <th>
-                            Mature usable
-                            <br />
-                            <small>C / T</small>
-                          </th>
-                          <th>
-                            Pending /<br />
-                            unavailable
-                          </th>
-                          <th>
-                            Bad rates
-                            <br />
-                            <small>C / T, with CI</small>
-                          </th>
-                          <th>
-                            Reduction
-                            <br />
-                            <small>{plan.inputs.confidence}% CI · pp</small>
-                          </th>
-                          <th>
-                            Detection
-                            <br />
-                            <small>95% MC interval</small>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {displayWeeks.map((week, index) => {
-                          const sim = simulation?.weeks[tablePage * 12 + index];
-                          const ci = mode === 'forecast' ? week.expectedDifference : sim?.interval;
-                          const rateC =
-                            mode === 'forecast' ? (week.matureC ? plan.pC : null) : sim?.rateC;
-                          const rateT =
-                            mode === 'forecast' ? (week.matureT ? plan.pT : null) : sim?.rateT;
-                          const ciC = mode === 'forecast' ? week.expectedC : sim?.intervalC;
-                          const ciT = mode === 'forecast' ? week.expectedT : sim?.intervalT;
-                          return (
-                            <tr
-                              key={week.day}
-                              className={week.day === plan.finalDay ? 'final-row' : ''}
-                            >
-                              <td>
-                                <strong>
-                                  {week.day === plan.finalDay
-                                    ? 'Final readout'
-                                    : `Week ${week.day / 7}`}
-                                </strong>
-                                <small>{formatDate(week.date)}</small>
-                              </td>
-                              <td>
-                                {number(week.enrolledC)} / {number(week.enrolledT)}
-                              </td>
-                              <td>
-                                {number(week.matureC)} / {number(week.matureT)}
-                              </td>
-                              <td>
-                                {number(week.pending)} / {number(week.unavailable)}
-                              </td>
-                              <td>
-                                {rateC !== null && rateC !== undefined ? (
-                                  <>
-                                    <span>
-                                      C: {pct(rateC)} <small>{intervalText(ciC)}</small>
-                                    </span>
-                                    <span>
-                                      T:{' '}
-                                      {rateT !== null && rateT !== undefined
-                                        ? pct(rateT)
-                                        : 'No mature labels'}{' '}
-                                      <small>{intervalText(ciT)}</small>
-                                    </span>
-                                  </>
-                                ) : (
-                                  <span className="muted">No mature labels</span>
-                                )}
-                              </td>
-                              <td>
-                                {ci ? (
-                                  <>
-                                    <strong>
-                                      {pp(
-                                        mode === 'forecast' ? plan.delta : (sim?.difference ?? 0),
-                                      )}
-                                    </strong>
-                                    <small>{intervalText(ci, true)}</small>
-                                  </>
-                                ) : (
-                                  <span className="muted">—</span>
-                                )}
-                              </td>
-                              <td>
-                                {sim?.detection !== null && sim?.detection !== undefined ? (
-                                  <>
-                                    {pct(sim.detection, 1)}
-                                    <small>{intervalText(sim.detectionInterval)}</small>
-                                  </>
-                                ) : (
-                                  <span className="muted">—</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="table-footer">
-                    <span>Days are elapsed since start · C = control · T = treatment</span>
-                    <div>
-                      <button
-                        onClick={() => setTablePage((page) => page - 1)}
-                        disabled={tablePage === 0}
-                      >
-                        Previous
-                      </button>
-                      <span>
-                        {tablePage + 1} / {totalPages}
-                      </span>
-                      <button
-                        onClick={() => setTablePage((page) => page + 1)}
-                        disabled={tablePage >= totalPages - 1}
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="table-empty">
-                  <BarChart3 size={21} />
-                  <p>Your weekly breakdown will appear after you calculate a plan.</p>
-                </div>
-              )}
-            </section>
           </div>
         </div>
+        {plan && (
+          <>
+            <WeeklyTable key={JSON.stringify(plan.inputs)} plan={plan} />
+            <div className="projection-note">
+              <Info size={16} />
+              <p>
+                These are calculated projections from your assumptions. Make one planned final
+                decision after the required sample has matured; weekly intervals are not an
+                early-stopping rule.
+              </p>
+            </div>
+          </>
+        )}
         <Methodology />
-        <footer className="footer">
+        <footer>
           <span>
-            <span className="footer-brand">CreditLab</span> Thoughtful experiments. Clearer
-            decisions.
+            <strong>CreditLab</strong> A little more clarity before you test.
           </span>
-          <span>A planning tool, with transparent assumptions.</span>
+          <span>Sample size · label delay · projected precision</span>
         </footer>
       </main>
       {notice && (
         <div className="toast" role="status">
           <Check size={17} />
           <span>{notice}</span>
-          <button onClick={() => setNotice('')} aria-label="Dismiss notification">
-            <X size={14} />
+          <button aria-label="Dismiss notification" onClick={() => setNotice('')}>
+            <X size={15} />
           </button>
         </div>
       )}
     </>
-  );
-}
-
-function SlidersIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-      <path d="M3 5h12M3 13h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <rect
-        x="6"
-        y="2.5"
-        width="3"
-        height="5"
-        rx="1"
-        fill="white"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-      <rect
-        x="10"
-        y="10.5"
-        width="3"
-        height="5"
-        rx="1"
-        fill="white"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-    </svg>
   );
 }
