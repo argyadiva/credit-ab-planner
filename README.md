@@ -76,9 +76,11 @@ Example: 10% control bad rate, 10% relative reduction to 9%, 80% power, and 95% 
 
 ## Deployment
 
-The public source repository is `argyadiva/credit-ab-planner`. Vercel builds the uploaded source from the same tested GitHub commit and serves the Vite `dist` output using `vercel.json`. GitHub Actions runs `npm ci`, `npm test`, and `npm run build` for pushes and pull requests. No runtime secrets or environment variables are required.
+Live website: [credit-ab-planner.vercel.app](https://credit-ab-planner.vercel.app).
 
-The initial deployment uses direct source upload because the Vercel account does not have its GitHub integration installed. Future pushes run GitHub checks but do not automatically deploy. To enable automatic production deployments from `main` and pull-request previews, install the Vercel GitHub integration and connect this repository in the Vercel project's Git settings. This requires account-owner interaction; no credentials are stored in the repository.
+The public source repository is `argyadiva/credit-ab-planner`, connected to the existing `credit-ab-planner` project in the `argyadivas-projects` Vercel team. Pushes to `main` automatically trigger production deployments; other branches and pull requests receive preview deployments through Vercel's GitHub integration.
+
+Vercel uses Node.js 24, installs dependencies with `npm ci`, builds with `npm run build`, and serves the Vite `dist` output using `vercel.json`. GitHub Actions also runs `npm ci`, `npm test`, and `npm run build` for pushes to `main` and pull requests. No runtime secrets or environment variables are required, and no deployment credentials are stored in the repository.
 
 For a manual deployment from an authenticated development machine, run `npx vercel deploy --prod` from this checkout and select the existing `credit-ab-planner` project in the `argyadivas-projects` team.
 
