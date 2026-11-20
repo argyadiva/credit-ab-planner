@@ -43,6 +43,7 @@ export interface Week {
   expectedC: Interval | null;
   expectedT: Interval | null;
   expectedDifference: Interval | null;
+  projectedPower: number | null;
 }
 export interface Plan {
   inputs: Inputs;
@@ -267,6 +268,7 @@ export function buildPlan(inputs: Inputs): Plan {
         matureC && matureT
           ? differenceInterval(matureC * pC, matureC, matureT * pT, matureT, confidence)
           : null,
+      projectedPower: matureC && matureT ? powerAt(matureC, matureT, pC, pT, alpha) : null,
     };
   });
   const warnings: string[] = [];

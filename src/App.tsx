@@ -34,6 +34,7 @@ import {
 } from './scenario';
 
 const ForecastChart = lazy(() => import('./ForecastChart'));
+const PowerChart = lazy(() => import('./PowerChart'));
 const count = (value: number) => new Intl.NumberFormat('en').format(value);
 const dayUnit = (value: number) => (value === 1 ? 'day' : 'days');
 const percent = (value: number) => `${(value * 100).toFixed(2)}%`;
@@ -154,6 +155,11 @@ function Methodology() {
             Positive reduction means control bad rate minus treatment bad rate. Relative percent and
             percentage-point inputs are converted to the same treatment rate.
           </p>
+          <p>
+            The goal is to detect the assumed improvement versus no difference. Power is the chance
+            of detecting a difference if that improvement is real; it does not prove the improvement
+            exceeds a minimum threshold. Confidence sets the two-sided significance level.
+          </p>
         </div>
         <div>
           <h3>Time until analysis</h3>
@@ -180,6 +186,12 @@ function Methodology() {
           <p>
             The final sample is designed for one planned final analysis. Weekly projections do not
             provide an early-stopping rule.
+          </p>
+          <p>
+            Projected detection power uses each week's usable control and treatment samples in the
+            same power calculation. More mature data increases power and precision, while the
+            assumed bad rates stay fixed. Waiting after all collected samples have matured adds no
+            data. Early projections with small samples use a normal approximation and can be imprecise.
           </p>
         </div>
         <div>
@@ -234,7 +246,7 @@ function WeeklyTable({ plan }: { plan: Plan }) {
       <div className="section-heading">
         <div>
           <h2>Week-by-week projection</h2>
-          <p>{plan.inputs.confidence}% intervals based on your assumed bad rates.</p>
+          <p>{plan.inputs.confidence}% intervals and detection power based on your assumed bad rates.</p>
         </div>
         <span className="small-label">C = control · T = treatment</span>
       </div>
@@ -261,7 +273,7 @@ function WeeklyTable({ plan }: { plan: Plan }) {
       <div
         className="table-scroll"
         role="region"
-        aria-label="Projected weekly confidence intervals"
+        aria-label="Projected weekly confidence intervals, detection power, and usable samples"
         tabIndex={0}
       >
         <table>
@@ -287,6 +299,11 @@ function WeeklyTable({ plan }: { plan: Plan }) {
                 Bad-rate reduction
                 <br />
                 <small>{plan.inputs.confidence}% CI · pp</small>
+              </th>
+              <th>
+                Detection power
+                <br />
+                <small>Target {plan.inputs.power}%</small>
               </th>
             </tr>
           </thead>
@@ -333,6 +350,13 @@ function WeeklyTable({ plan }: { plan: Plan }) {
                     </>
                   ) : (
                     '—'
+                  )}
+                </td>
+                <td>
+                  {week.projectedPower === null ? (
+                    <span className="unavailable">Not available yet</span>
+                  ) : (
+                    <strong>{percent(week.projectedPower)}</strong>
                   )}
                 </td>
               </tr>
@@ -545,8 +569,9 @@ export default function App() {
                 placeholder: 'e.g. 10',
                 hint: 'The current bad-loan rate among funded loans.',
               })}
-              {field('effect', 'Expected bad-rate reduction', {
+              {field('effect', 'Improvement to detect', {
                 placeholder: draft.effectMode === 'relative' ? 'e.g. 10' : 'e.g. 1',
+                hint: 'Assumed reduction in the funded bad-loan rate. More data improves detection power; it does not increase this effect.',
                 children: (
                   <>
                     <select
@@ -570,12 +595,12 @@ export default function App() {
                 {field('power', 'Statistical power', {
                   suffix: '%',
                   placeholder: 'e.g. 80',
-                  hint: 'Chance of detecting the assumed effect.',
+                  hint: 'Chance of detecting a difference if the assumed improvement is real.',
                 })}
                 {field('confidence', 'Confidence level', {
                   suffix: '%',
                   placeholder: 'e.g. 95',
-                  hint: 'For a two-sided test.',
+                  hint: 'Sets the two-sided significance level: 100% minus confidence.',
                 })}
               </div>
               <fieldset className="volume-mode">
@@ -630,7 +655,7 @@ export default function App() {
                 suffix: 'days',
                 placeholder: 'e.g. 97',
                 step: '1',
-                hint: 'Days from funding to a usable outcome, including observation and reporting. Enter 0 for immediate labels.',
+                hint: 'Days from funding to a usable outcome, including observation and reporting. This is not application-to-disbursement time. Enter 0 for immediate labels.',
               })}
               <details
                 className="advanced"
@@ -711,6 +736,20 @@ export default function App() {
             </div>
             {plan ? (
               <>
+                <section className="goal-summary" aria-labelledby="goal-heading">
+                  <h3 id="goal-heading">Your detection goal</h3>
+                  <p>
+                    Detect a reduction from <strong>{percent(plan.pC)}</strong> to{' '}
+                    <strong>{percent(plan.pT)}</strong> bad rate with{' '}
+                    <strong>{plan.inputs.power}% power</strong> at a two-sided{' '}
+                    <strong>{Number((100 - plan.inputs.confidence).toFixed(4))}% significance level</strong>{' '}
+                    ({plan.inputs.confidence}% confidence).
+                  </p>
+                  <p className="goal-explanation">
+                    More mature outcomes improve detection power and precision. They do not increase
+                    the true improvement or guarantee a successful test.
+                  </p>
+                </section>
                 <div className="metrics-grid">
                   <Metric
                     label="Required labeled sample"
@@ -818,6 +857,33 @@ export default function App() {
                       Control stays at the assumed baseline of <strong>{percent(plan.pC)}</strong> and
                       treatment at <strong>{percent(plan.pT)}</strong>. Bands narrow as usable samples
                       grow. These are projected rates; actual experiment estimates will vary.
+                    </p>
+                  </div>
+                </section>
+                <section className="panel chart-panel power-panel">
+                  <div className="section-heading">
+                    <div>
+                      <h2>Projected detection power over time</h2>
+                      <p>Chance of detecting a difference if your assumed improvement is real.</p>
+                    </div>
+                  </div>
+                  <div className="chart-meta">
+                    <span>Power · %</span>
+                    <div className="chart-legend" aria-label="Power chart legend">
+                      <span><i className="power-swatch" />Projected power</span>
+                      <span><i className="power-target-swatch" />{plan.inputs.power}% target</span>
+                    </div>
+                  </div>
+                  <Suspense fallback={<div className="chart-loading">Preparing the power projection…</div>}>
+                    <PowerChart plan={plan} />
+                  </Suspense>
+                  <div className="chart-note">
+                    <Info size={15} />
+                    <p>
+                      Plan one final analysis on <strong>day {count(plan.finalDay)}</strong>
+                      {plan.finalDate && ` (${formatDate(plan.finalDate)})`}, after both samples have
+                      matured. This is a projection, not an early-stopping rule. Power is unavailable
+                      until both arms have usable outcomes.
                     </p>
                   </div>
                 </section>

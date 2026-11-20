@@ -18,8 +18,8 @@ export const emptyDraft = (): Draft => ({
   baseline: '',
   effect: '',
   effectMode: 'relative',
-  power: '',
-  confidence: '',
+  power: '80',
+  confidence: '95',
   volumeMode: 'total',
   dailyLoans: '',
   controlDailyLoans: '',
@@ -91,6 +91,10 @@ export function restoreScenario(search: string): { draft: Draft; error: string |
       error:
         'This scenario link uses an unsupported version. Enter your assumptions or try the example.',
     };
+  // Incomplete saved scenarios must still ask for their missing assumptions.
+  // The new defaults apply to a fresh calculator, not to previously invalid links.
+  draft.power = '';
+  draft.confidence = '';
   for (const key of Object.keys(draft) as (keyof Draft)[]) {
     if (version !== '3' && ['volumeMode', 'controlDailyLoans', 'treatmentDailyLoans'].includes(key)) continue;
     if (version === '1' && (key === 'dailyLoans' || key === 'labelLagDays')) continue;
@@ -183,7 +187,7 @@ export function exportCsv(plan: Plan) {
   const rows: unknown[][] = [
     ['CreditLab — calculator projections'],
     [
-      'Assumption rates use percent units. Weekly rates and intervals use fractions: multiply by 100 for percent or percentage points.',
+      'Assumption rates use percent units. Weekly rates, intervals, and forecast_detection_power use fractions: multiply by 100 for percent or percentage points.',
     ],
     ['Method', 'Two-sided fixed-horizon planning; projected intervals are not observed results'],
   ];
@@ -221,6 +225,7 @@ export function exportCsv(plan: Plan) {
       'forecast_reduction',
       'forecast_reduction_ci_low',
       'forecast_reduction_ci_high',
+      'forecast_detection_power',
     ],
   );
   for (const week of plan.weeks)
@@ -240,6 +245,7 @@ export function exportCsv(plan: Plan) {
       ...(week.expectedT ?? [null, null]),
       week.expectedDifference ? plan.delta : null,
       ...(week.expectedDifference ?? [null, null]),
+      week.projectedPower,
     ]);
   return '\uFEFF' + rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
 }

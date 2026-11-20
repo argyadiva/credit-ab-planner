@@ -4,6 +4,7 @@ import {
   cdf,
   dateAt,
   differenceInterval,
+  powerAt,
   quantile,
   sampleSize,
   validate,
@@ -181,15 +182,17 @@ describe('cohort timing and label coverage', () => {
 });
 
 describe('validation and portable scenarios', () => {
-  it('keeps assumptions blank and rejects missing or invalid values', () => {
+  it('defaults power and confidence while keeping scenario assumptions blank', () => {
     const draft = emptyDraft();
     expect(draft.baseline).toBe('');
-    expect(draft.power).toBe('');
+    expect(draft.effect).toBe('');
+    expect(draft.power).toBe('80');
+    expect(draft.confidence).toBe('95');
     expect(draft.dailyLoans).toBe('');
     expect(draft.labelLagDays).toBe('');
     expect(draft.treatmentShare).toBe('50');
     expect(draft.coverage).toBe('100');
-    expect(validate(parseDraft(draft)).length).toBeGreaterThan(5);
+    expect(validate(parseDraft(draft)).length).toBe(4);
     for (const patch of [
       { effect: 0 },
       { effect: 100 },
@@ -272,7 +275,7 @@ describe('validation and portable scenarios', () => {
     expect(csv).toMatch(/"-0\./);
     expect(csv).not.toMatch(/"'-0\./);
     expect(csv).not.toContain('sim_');
-    expect(csv).not.toContain('detection');
+    expect(csv).toContain('forecast_detection_power');
     expect(csv).toContain('projected_usable_control');
   });
 });
@@ -405,5 +408,95 @@ describe('baseline-percentage forecast chart', () => {
     expect(final.treatmentInterval![1] - final.treatmentInterval![0]).toBeGreaterThan(final.controlInterval![1] - final.controlInterval![0]);
     const first = data.find((row) => row.control !== null)!;
     expect(final.controlInterval![1] - final.controlInterval![0]).toBeLessThan(first.controlInterval![1] - first.controlInterval![0]);
+  });
+});
+
+describe('goal-based detection power projections', () => {
+  // Independently calculated using Python statistics.NormalDist and the documented test formula.
+  it.each([
+    [50, 100, 2000, 2000, 0.19018175879793875],
+    [20, 100, 3200, 800, 0.12885285827717036],
+    [20, 80, 2560, 640, 0.11127287679233128],
+  ])('matches reference power with %s%% treatment allocation and %s%% coverage', (share, coverage, nC, nT, power) => {
+    const plan = buildPlan({ ...inputs, treatmentShare: share, coverage });
+    const week = plan.weeks.find((week) => week.day === 105)!;
+    expect(week.matureC).toBe(nC);
+    expect(week.matureT).toBe(nT);
+    expect(week.projectedPower).toBeCloseTo(power, 10);
+    for (const delayed of plan.weeks.filter((week) => week.day <= plan.lagDays))
+      expect(delayed.projectedPower).toBeNull();
+    const final = plan.weeks.at(-1)!;
+    expect(final.projectedPower).toBeGreaterThanOrEqual(inputs.power / 100);
+    expect(final.projectedPower).toBeCloseTo(
+      powerAt(final.matureC, final.matureT, plan.pC, plan.pT, 0.05), 12,
+    );
+  });
+
+  it('leaves power unavailable if only one arm has usable outcomes', () => {
+    const plan = buildPlan({ ...inputs, effect: 50, dailyLoans: 100, treatmentShare: 0.1, labelLagDays: 0 });
+    const week = plan.weeks.find((week) => week.day === 7)!;
+    expect(week.matureC).toBeGreaterThan(0);
+    expect(week.matureT).toBe(0);
+    expect(week.projectedPower).toBeNull();
+  });
+
+  it('increases power with mature data without changing assumed rates', () => {
+    const fast = buildPlan({ ...inputs, labelLagDays: 0 });
+    const slow = buildPlan({ ...inputs, labelLagDays: 0, dailyLoans: 250 });
+    const fastWeek = fast.weeks.find((week) => week.day === 14)!;
+    const slowWeek = slow.weeks.find((week) => week.day === 14)!;
+    expect(fastWeek.projectedPower).toBeGreaterThan(slowWeek.projectedPower!);
+    expect(fast.pC).toBe(slow.pC);
+    expect(fast.pT).toBe(slow.pT);
+    const powers = fast.weeks.flatMap((week) => week.projectedPower === null ? [] : [week.projectedPower]);
+    for (let i = 1; i < powers.length; i++) expect(powers[i]).toBeGreaterThanOrEqual(powers[i - 1]);
+    const smallerEffect = buildPlan({ ...inputs, labelLagDays: 0, effect: 5 });
+    expect(smallerEffect.targetC).toBeGreaterThan(fast.targetC);
+    expect(smallerEffect.finalDay).toBeGreaterThan(fast.finalDay);
+  });
+
+  it('does not gain final power just by waiting longer for the same collected samples', () => {
+    const original = buildPlan(inputs);
+    const moreDelay = buildPlan({ ...inputs, labelLagDays: inputs.labelLagDays + 7 });
+    expect(moreDelay.finalDay).toBe(original.finalDay + 7);
+    expect(moreDelay.weeks.at(-1)!.projectedPower).toBe(original.weeks.at(-1)!.projectedPower);
+  });
+
+  it('supports a single mature forecast point with no label delay', () => {
+    const plan = buildPlan({ ...inputs, dailyLoans: 1e6, labelLagDays: 0 });
+    expect(plan.weeks.map((week) => week.day)).toEqual([0, 1]);
+    expect(plan.weeks[0].projectedPower).toBeNull();
+    expect(plan.weeks[1].projectedPower).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it.each(['1', '2', '3'])('preserves explicit settings and missing-assumption errors in version %s links', (version) => {
+    const original = { ...inputs, power: 90, confidence: 99 };
+    const url = new URL(scenarioUrl(original, 'https://example.com'));
+    url.searchParams.set('v', version);
+    if (version === '1') {
+      for (const [key, value] of Object.entries({ dailyApplicants: '1000', funding: '50', observationDays: '90', reportingDays: '7' }))
+        url.searchParams.set(key, value);
+    }
+    const restored = restoreScenario(url.search);
+    expect(parseDraft(restored.draft)).toEqual(original);
+    url.searchParams.delete('power');
+    url.searchParams.delete('confidence');
+    const incomplete = restoreScenario(url.search);
+    expect(incomplete.draft.power).toBe('');
+    expect(incomplete.draft.confidence).toBe('');
+    expect(validate(parseDraft(incomplete.draft))).toHaveLength(2);
+    expect(restoreScenario('').draft).toEqual(emptyDraft());
+  });
+
+  it('appends power as a fraction in CSV while retaining existing weekly columns and nulls', () => {
+    const plan = buildPlan(inputs);
+    const lines = exportCsv(plan).split('\r\n');
+    const header = lines.findIndex((line) => line.startsWith('"elapsed_day"'));
+    expect(lines[header]).toMatch(/"forecast_reduction_ci_high","forecast_detection_power"$/);
+    const data = lines.slice(header + 1);
+    expect(data).toHaveLength(plan.weeks.length);
+    expect(data[0]).toMatch(/,""$/);
+    expect(data.at(-1)!.endsWith(`,"${plan.weeks.at(-1)!.projectedPower}"`)).toBe(true);
+    expect(lines[1]).toContain('forecast_detection_power use fractions');
   });
 });

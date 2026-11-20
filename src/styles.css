@@ -648,6 +648,55 @@ h1 {
   border-top-color: #526fa4;
   border-top-style: dashed;
 }
+.goal-summary {
+  margin-bottom: 16px;
+  padding: 20px 24px;
+  border: 1px solid #dbe5df;
+  border-radius: 12px;
+  background: #f7faf7;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: #405d4a;
+}
+.goal-summary h3 {
+  margin-bottom: 7px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.goal-summary .goal-explanation {
+  margin-top: 8px;
+  font-size: 0.875rem;
+  color: #64796d;
+}
+.power-panel .section-heading p,
+.power-panel .chart-meta,
+.power-panel .chart-note {
+  font-size: 0.875rem;
+}
+.power-panel {
+  margin-top: 18px;
+}
+.chart-meta .power-swatch {
+  border-top-color: #7761a8;
+}
+.chart-meta .power-target-swatch {
+  border-top-color: #879589;
+  border-top-style: dashed;
+}
+.power-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-width: min(280px, 65vw);
+  padding: 12px 14px;
+  border: 1px solid #dbe5df;
+  border-radius: 10px;
+  background: white;
+  color: #405d4a;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  box-shadow: 0 3px 12px #163c2812;
+}
 .volume-mode {
   border: 0;
   margin: 0 0 20px;
