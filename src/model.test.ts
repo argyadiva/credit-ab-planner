@@ -17,7 +17,9 @@ import {
   parseDraft,
   restoreScenario,
   scenarioUrl,
+  switchVolumeMode,
 } from './scenario';
+import { forecastData } from './ForecastChart';
 
 const inputs: Inputs = {
   baseline: 10,
@@ -25,6 +27,7 @@ const inputs: Inputs = {
   effectMode: 'relative',
   power: 80,
   confidence: 95,
+  volumeMode: 'total',
   dailyLoans: 500,
   treatmentShare: 50,
   labelLagDays: 97,
@@ -200,10 +203,10 @@ describe('validation and portable scenarios', () => {
     }
   });
 
-  it('round trips inputs in version-2 URLs', () => {
+  it('round trips total-volume inputs in version-3 URLs', () => {
     const original = { ...inputs, outcome: '30+ DPD, observed & complete' };
     const url = scenarioUrl(original, 'https://example.com/?old=true#old');
-    expect(new URL(url).searchParams.get('v')).toBe('2');
+    expect(new URL(url).searchParams.get('v')).toBe('3');
     expect(url).not.toContain('seed');
     const restored = restoreScenario(new URL(url).search);
     expect(restored.error).toBeNull();
@@ -271,5 +274,136 @@ describe('validation and portable scenarios', () => {
     expect(csv).not.toContain('sim_');
     expect(csv).not.toContain('detection');
     expect(csv).toContain('projected_usable_control');
+  });
+});
+
+
+describe('separate daily funded volumes', () => {
+  const separate = (controlDailyLoans: number, treatmentDailyLoans: number): Inputs => ({
+    baseline: 10, effect: 10, effectMode: 'relative', power: 80, confidence: 95,
+    coverage: 100, labelLagDays: 97, volumeMode: 'separate',
+    controlDailyLoans, treatmentDailyLoans,
+  });
+
+  it.each([50, 20, 80, 23.7])('matches total-volume planning at %s percent treatment', (share) => {
+    const total = buildPlan({ ...inputs, treatmentShare: share });
+    const split = buildPlan({ ...separate(total.dailyC, total.dailyT), startDate: inputs.startDate, outcome: inputs.outcome });
+    expect({ ...split, inputs: total.inputs }).toEqual(total);
+  });
+
+  it.each([[300, 100], [100, 400], [89.5, 27.75]])(
+    'meets both targets with %s control/day and %s treatment/day and partial coverage',
+    (control, treatment) => {
+      const plan = buildPlan({ ...separate(control, treatment), coverage: 67.3 });
+      const final = plan.weeks.at(-1)!;
+      expect(final.matureC).toBeGreaterThanOrEqual(plan.targetC);
+      expect(final.matureT).toBeGreaterThanOrEqual(plan.targetT);
+      expect(final.enrolledC).toBe(Math.floor(plan.enrollmentDays * control));
+      expect(final.enrolledT).toBe(Math.floor(plan.enrollmentDays * treatment));
+      expect(final.pending).toBe(0);
+      const widthC = final.expectedC![1] - final.expectedC![0];
+      const widthT = final.expectedT![1] - final.expectedT![0];
+      expect(widthC > widthT).toBe(control < treatment);
+      for (const week of plan.weeks) {
+        expect(week.enrolledC + week.enrolledT).toBe(week.matureC + week.matureT + week.pending + week.unavailable);
+      }
+    },
+  );
+
+  it('handles immediate labels and never calculates intervals before either arm has labels', () => {
+    const plan = buildPlan({ ...separate(300, 100), labelLagDays: 0 });
+    expect(plan.finalDay).toBe(plan.enrollmentDays);
+    for (const week of plan.weeks) {
+      expect(week.matureC).toBe(week.enrolledC);
+      expect(week.matureT).toBe(week.enrolledT);
+    }
+    expect(plan.weeks[0].expectedC).toBeNull();
+    expect(plan.weeks[0].expectedT).toBeNull();
+  });
+
+  it.each([NaN, 0, -1, Infinity, 1e9 + 1])('rejects invalid per-arm volume %s', (value) => {
+    expect(validate(separate(value, 100)).length).toBeGreaterThan(0);
+    expect(validate(separate(100, value)).length).toBeGreaterThan(0);
+  });
+
+  it('rejects excessive combined volume and missing active inputs', () => {
+    expect(validate(separate(6e8, 6e8)).length).toBe(2);
+    expect(validate({ ...inputs, dailyLoans: 1e9 + 0.5 }).length).toBeGreaterThan(0);
+    const draft = { ...exampleDraft(), volumeMode: 'separate' };
+    expect(validate(parseDraft(draft)).length).toBe(2);
+  });
+
+  it('ignores inactive fields, preserves valid volumes on switching, and clears invalid destinations', () => {
+    const draft = { ...exampleDraft(), treatmentShare: '20', controlDailyLoans: 'bad', treatmentDailyLoans: '' };
+    const split = switchVolumeMode(draft, 'separate');
+    expect(split.controlDailyLoans).toBe('400');
+    expect(split.treatmentDailyLoans).toBe('100');
+    const splitWithInvalidHidden = { ...split, dailyLoans: '', treatmentShare: 'bad' };
+    expect(validate(parseDraft(splitWithInvalidHidden))).toEqual([]);
+    expect(parseDraft(splitWithInvalidHidden)).not.toHaveProperty('dailyLoans');
+    const restored = switchVolumeMode(splitWithInvalidHidden, 'total');
+    expect(restored.dailyLoans).toBe('500');
+    expect(restored.treatmentShare).toBe('20');
+    expect(switchVolumeMode({ ...draft, dailyLoans: '' }, 'separate').controlDailyLoans).toBe('');
+    expect(switchVolumeMode({ ...split, treatmentDailyLoans: '0' }, 'total').dailyLoans).toBe('');
+    expect(switchVolumeMode(emptyDraft(), 'separate').treatmentDailyLoans).toBe('');
+  });
+
+  it('round trips separate-volume links and exports the selected mode and resolved volumes', () => {
+    const original = separate(300, 100);
+    const url = scenarioUrl(original, 'https://example.com');
+    expect(new URL(url).searchParams.get('v')).toBe('3');
+    expect(new URL(url).searchParams.has('dailyLoans')).toBe(false);
+    expect(new URL(url).searchParams.has('treatmentShare')).toBe(false);
+    const restored = restoreScenario(new URL(url).search);
+    expect(restored.error).toBeNull();
+    expect(parseDraft(restored.draft)).toEqual({ ...original, startDate: undefined, outcome: undefined });
+    const csv = exportCsv(buildPlan(original));
+    expect(csv).toContain('"volumeMode","separate"');
+    expect(csv).toContain('"resolved_control_daily_loans","300"');
+    expect(csv).toContain('"resolved_treatment_daily_loans","100"');
+    expect(csv).toContain('forecast_reduction_ci_low');
+  });
+
+  it('restores version-2 inputs unchanged and rejects malformed version-3 modes and active numbers', () => {
+    const old = new URL(scenarioUrl(inputs, 'https://example.com'));
+    old.searchParams.set('v', '2');
+    old.searchParams.delete('volumeMode');
+    // New keys in an old URL must not change its original meaning.
+    old.searchParams.set('volumeMode', 'separate');
+    old.searchParams.set('controlDailyLoans', '100');
+    expect(parseDraft(restoreScenario(old.search).draft)).toEqual(inputs);
+    for (const mode of ['', 'bogus']) {
+      const restored = restoreScenario(`?v=3&volumeMode=${mode}&dailyLoans=500`);
+      expect(restored.error).toContain('volume mode');
+      expect(restored.draft.dailyLoans).toBe('');
+    }
+    const bad = restoreScenario('?v=3&volumeMode=separate&controlDailyLoans=Infinity&treatmentDailyLoans=100');
+    expect(bad.error).not.toBeNull();
+    expect(bad.draft.controlDailyLoans).toBe('');
+    expect(restoreScenario('?v=3&volumeMode=separate&dailyLoans=Infinity').error).toBeNull();
+  });
+});
+
+describe('baseline-percentage forecast chart', () => {
+  it('plots 10 percent control and 9 percent treatment, with arm-specific bands and missing-data gaps', () => {
+    const plan = buildPlan({ ...inputs, treatmentShare: 20 });
+    const data = forecastData(plan);
+    expect(data[0].control).toBeNull();
+    expect(data[0].treatment).toBeNull();
+    for (const row of data.filter((row) => row.day <= plan.lagDays)) {
+      expect(row.controlInterval).toBeNull();
+      expect(row.treatmentInterval).toBeNull();
+    }
+    const final = data.at(-1)!;
+    expect(final.control).toBe(10);
+    expect(final.treatment).toBeCloseTo(9, 12);
+    expect(final.controlInterval![0]).toBeLessThan(10);
+    expect(final.controlInterval![1]).toBeGreaterThan(10);
+    expect(final.treatmentInterval![0]).toBeLessThan(9);
+    expect(final.treatmentInterval![1]).toBeGreaterThan(9);
+    expect(final.treatmentInterval![1] - final.treatmentInterval![0]).toBeGreaterThan(final.controlInterval![1] - final.controlInterval![0]);
+    const first = data.find((row) => row.control !== null)!;
+    expect(final.controlInterval![1] - final.controlInterval![0]).toBeLessThan(first.controlInterval![1] - first.controlInterval![0]);
   });
 });

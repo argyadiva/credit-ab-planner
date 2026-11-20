@@ -2,7 +2,7 @@
 
 [Open the calculator](https://credit-ab-planner.vercel.app).
 
-A browser-only calculator for credit-score A/B test sample sizes, time until analysis, and projected weekly confidence intervals. Enter six assumptions; results update automatically. All results are deterministic projections from those assumptions.
+A browser-only calculator for credit-score A/B test sample sizes, time until analysis, and projected weekly confidence intervals. Enter your assumptions; results update automatically. All results are deterministic projections from those assumptions.
 
 ## Run locally
 
@@ -21,22 +21,22 @@ npm run preview
 
 ## Calculator inputs
 
-The six essential inputs start blank:
+Core assumptions start blank:
 
 - **Baseline bad-loan rate:** expected bad outcomes among funded loans in control.
 - **Expected reduction:** relative percent or percentage points, with the implied treatment rate displayed.
 - **Power:** probability of detecting the assumed effect at the final analysis under the model.
 - **Confidence level:** two-sided confidence level; alpha is one minus confidence.
-- **Funded loans per day:** total across both arms, averaged over calendar days.
+- **Funded-loan volume:** choose total funded loans/day plus treatment allocation, or enter separate control and treatment daily volumes. Fractional calendar-day averages are supported; the combined daily volume must be above zero and at most 1 billion, with positive volume in each arm.
 - **Total label delay:** days from funding to a usable outcome, including the observation window and reporting delay. Zero is supported.
 
-Advanced settings default to 50/50 control/treatment allocation and 100% usable labels. Start date and outcome description are optional. Dates appear only when a start date is supplied. **Try an example** explicitly loads illustrative values; **Reset** clears essential inputs and restores advanced defaults.
+The default volume mode is total plus allocation, with a 50/50 funded split. Switching modes converts valid entered volumes; invalid source volumes leave the destination fields blank. Only fields in the selected mode affect calculations. Advanced settings default to 100% usable labels. Start date and outcome description are optional. Dates appear only when a start date is supplied. **Try an example** explicitly loads illustrative values; **Reset** clears essential inputs and restores advanced defaults.
 
 There are no uploads, accounts, data connections, database, analytics, random-outcome simulations, or server-side calculations. Share links contain manually entered aggregate assumptions. The application does not send calculation inputs to a backend.
 
 ## Results
 
-The calculator shows labeled-sample targets per arm and total, collection days, and **collection days + label delay = total duration**. Label coverage increases the required funded volume when some loans are expected to lack usable final labels. A chart and accessible weekly table show projected usable samples, arm bad-rate confidence intervals, and the interval for the bad-rate reduction.
+The calculator shows labeled-sample targets per arm and total, collection days, and **collection days + label delay = total duration**. Label coverage increases the required funded volume when some loans are expected to lack usable final labels. The chart shows two assumed bad-loan rates as percentages: control at the baseline and treatment at the expected rate. Each has its own projected confidence band, using that arm’s usable samples. Assumed rates stay flat while bands narrow; no estimates appear before usable labels exist. An accessible weekly table shows usable samples, both arm-rate intervals, and the interval for the bad-rate reduction.
 
 Weeks with no usable labels are summarized in the table and can be expanded. CSV export includes every week, including day zero, all assumptions, forecast intervals, and optional dates. Assumption rates use percent units; weekly rates and reduction intervals are exported as fractions, with the conversion stated in the CSV. User-written spreadsheet formulas are escaped as literal text while negative numeric interval bounds remain numeric.
 
@@ -55,13 +55,13 @@ critical = normal_quantile(1-alpha/2) * SE0
 power = Phi((pC-pT-critical)/SE1) + Phi((-(pC-pT)-critical)/SE1)
 ```
 
-Integer bisection finds the control target for the chosen treatment/control ratio. Treatment size is rounded upward and achieved approximate power is checked again after rounding. This is a fixed-horizon superiority design, not an exact binomial or sequential design.
+Both volume modes resolve to control and treatment funded loans/day. Integer bisection finds the control target for the treatment/control daily-volume ratio. Treatment size is rounded upward and achieved approximate power is checked again after rounding. This is a fixed-horizon superiority design, not an exact binomial or sequential design.
 
 Arm-rate intervals use Wilson's score method. Reduction intervals use Newcombe's hybrid method combining the Wilson intervals. Forecast intervals substitute expected bad counts `n*p`, which may be fractional. These illustrate projected precision and are not observed-data confidence intervals or a guarantee of statistical significance.
 
 ### Timing and coverage
 
-Daily funded volume, allocation, coverage, and bad rates are constant deterministic assumptions. For coverage `c`, required funded volume is `ceil(labeled target / c)` in each arm. Collection lasts until both arms can supply their required usable sample, rounded to whole calendar days. This may collect more loans than the minimum target.
+Daily funded volumes for each arm, coverage, and bad rates are constant deterministic assumptions. Unequal funded volumes are supported; usable label coverage and delay are shared between arms. For coverage `c`, required funded volume is `ceil(labeled target / c)` in each arm. Collection lasts until both arms can supply their required usable sample, rounded to whole calendar days. This may collect more loans than the minimum target.
 
 For elapsed day `d`, collection spans `min(d, collectionDays)` days. Fully followed cohorts span `max(0, min(d - labelLagDays, collectionDays))` days. Funded counts are floored to integers, then usable counts are floored after coverage is applied. Pending and unavailable labels are excluded from the bad-rate denominator. Even outcomes known early remain excluded until the cohort completes the full delay, avoiding selective inclusion of early bad events.
 
@@ -74,22 +74,24 @@ A 10% baseline, 10% relative reduction to 9%, 80% power, and 95% confidence requ
 ## Applicability and limits
 
 - Independent borrowers, with one analyzed loan each; repeat-borrower clustering is not modeled.
-- Comparable funding rates across scoring policies. Portfolio bad-rate comparisons do not isolate a score's causal effect on the same funded borrowers.
+- Different funded volumes across scoring policies are supported. Portfolio bad-rate comparisons do not isolate a score's causal effect on the same funded borrowers; differences in who gets funded may change the portfolio mix.
 - Missing labels are unrelated to outcomes and have the same expected coverage in both arms. Coverage is an expectation, not a guarantee of exact future counts.
 - Stable calendar-day volume, population mix, and bad rates. No seasonality, variable maturity curves, survival analysis, or loss modeling.
 - One planned final analysis. Weekly projections do not authorize early stopping.
 - Normal-approximation power can be unreliable for rare events or small samples. Final expected event counts below ten are flagged; early weekly intervals may still be imprecise.
-- Boundary bad rates, zero reduction, nonpositive volume/coverage, more than 10 billion labels per arm, and durations above 100 years are rejected.
+- Boundary bad rates, zero reduction, nonpositive volume/coverage, more than 10 billion labels per arm, invalid or excessive per-arm/combined volumes, and durations above 100 years are rejected.
 
 ## Shared-link compatibility
 
-New links use `v=2`, with `dailyLoans` and `labelLagDays`, and optional `startDate`/`outcome`.
+New links use `v=3` and include `volumeMode=total` with `dailyLoans`/`treatmentShare`, or `volumeMode=separate` with `controlDailyLoans`/`treatmentDailyLoans`. Only the active volume inputs are serialized, alongside the common assumptions and optional `startDate`/`outcome`. CSV assumptions include the selected mode and the resolved daily volumes for both arms.
+
+Version-2 links remain readable in total-plus-allocation mode without changing their calculations.
 
 Version-1 links remain readable. Their daily applicants multiplied by funding percentage become funded loans per day; observation plus reporting days become total label delay. Baseline, reduction mode, power, confidence, allocation, coverage, and optional descriptions/dates are preserved. Legacy random seeds are ignored. Malformed or unsupported scenarios receive an explanation rather than silently calculating invalid inputs.
 
 ## Validation and deployment
 
-Tests cover independent statistical references for balanced and unequal allocation, Wilson/Newcombe intervals, equivalent reduction modes, timing and label coverage, optional dates, zero delay, blank/invalid assumptions, both link versions, and safe forecast CSV export. Browser QA covers automatic updates, keyboard navigation, sharing/export, and desktop/mobile layouts.
+Tests cover independent statistical references for balanced and unequal allocation, Wilson/Newcombe intervals, equivalent reduction modes, timing and label coverage, optional dates, zero delay, blank/invalid assumptions, all three link versions, both volume modes and switching, arm-specific chart data, and safe forecast CSV export. Browser QA covers automatic updates, keyboard navigation, sharing/export, and desktop/mobile layouts.
 
 The public repository is `argyadiva/credit-ab-planner`, linked to the existing `credit-ab-planner` project in the `argyadivas-projects` Vercel team. Pushes to `main` trigger production deployments; other branches and pull requests receive Vercel previews. GitHub Actions runs tests and the production build for `main` pushes and pull requests. Vercel uses Node.js 24, `npm ci`, `npm run build`, and Vite's `dist` output. No runtime secrets or environment variables are required.
 

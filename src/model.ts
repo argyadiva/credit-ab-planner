@@ -1,17 +1,32 @@
 import { jStat } from 'jstat';
 
-export interface Inputs {
+interface CommonInputs {
   baseline: number;
   effect: number;
   effectMode: 'relative' | 'absolute';
   power: number;
   confidence: number;
-  dailyLoans: number;
-  treatmentShare: number;
   labelLagDays: number;
   coverage: number;
   startDate?: string;
   outcome?: string;
+}
+
+export type VolumeMode = 'total' | 'separate';
+export type Inputs = CommonInputs &
+  (
+    | { volumeMode: 'total'; dailyLoans: number; treatmentShare: number }
+    | { volumeMode: 'separate'; controlDailyLoans: number; treatmentDailyLoans: number }
+  );
+export type InputKey = keyof CommonInputs | 'volumeMode' | 'dailyLoans' | 'treatmentShare'
+  | 'controlDailyLoans' | 'treatmentDailyLoans';
+
+/** Resolve the active input mode once; all projections use these arm-specific volumes. */
+export function dailyVolumes(inputs: Inputs) {
+  if (inputs.volumeMode === 'separate')
+    return { dailyC: inputs.controlDailyLoans, dailyT: inputs.treatmentDailyLoans };
+  const share = inputs.treatmentShare / 100;
+  return { dailyC: inputs.dailyLoans * (1 - share), dailyT: inputs.dailyLoans * share };
 }
 
 export type Interval = [number, number];
@@ -31,6 +46,8 @@ export interface Week {
 }
 export interface Plan {
   inputs: Inputs;
+  dailyC: number;
+  dailyT: number;
   pC: number;
   pT: number;
   delta: number;
@@ -59,8 +76,8 @@ export function validDate(value: string) {
   );
 }
 
-export function validationErrors(input: Inputs): Partial<Record<keyof Inputs, string>> {
-  const errors: Partial<Record<keyof Inputs, string>> = {};
+export function validationErrors(input: Inputs): Partial<Record<InputKey, string>> {
+  const errors: Partial<Record<InputKey, string>> = {};
   const between = (value: number, min: number, max: number) =>
     Number.isFinite(value) && value > min && value < max;
   if (!between(input.baseline, 0, 100))
@@ -78,10 +95,23 @@ export function validationErrors(input: Inputs): Partial<Record<keyof Inputs, st
   if (!between(input.power, 50, 100)) errors.power = 'Enter power above 50% and below 100%.';
   if (!between(input.confidence, 50, 100))
     errors.confidence = 'Enter confidence above 50% and below 100%.';
-  if (!between(input.dailyLoans, 0, 1_000_000_001))
-    errors.dailyLoans = 'Enter funded loans per day above 0 and at most 1 billion.';
-  if (!between(input.treatmentShare, 0, 100))
-    errors.treatmentShare = 'Treatment allocation must be above 0% and below 100%.';
+  const validVolume = (value: number) => Number.isFinite(value) && value > 0 && value <= 1e9;
+  if (input.volumeMode === 'total') {
+    if (!validVolume(input.dailyLoans))
+      errors.dailyLoans = 'Enter funded loans per day above 0 and at most 1 billion.';
+    if (!between(input.treatmentShare, 0, 100))
+      errors.treatmentShare = 'Treatment allocation must be above 0% and below 100%.';
+  } else if (input.volumeMode === 'separate') {
+    if (!validVolume(input.controlDailyLoans))
+      errors.controlDailyLoans = 'Enter control funded loans per day above 0 and at most 1 billion.';
+    if (!validVolume(input.treatmentDailyLoans))
+      errors.treatmentDailyLoans = 'Enter treatment funded loans per day above 0 and at most 1 billion.';
+    if (!errors.controlDailyLoans && !errors.treatmentDailyLoans &&
+      input.controlDailyLoans + input.treatmentDailyLoans > 1e9) {
+      errors.controlDailyLoans = errors.treatmentDailyLoans =
+        'Combined funded loans per day must be at most 1 billion.';
+    }
+  } else errors.volumeMode = 'Select total plus allocation or separate daily volumes.';
   if (!Number.isFinite(input.coverage) || input.coverage <= 0 || input.coverage > 100)
     errors.coverage = 'Label coverage must be above 0% and at most 100%.';
   if (!Number.isInteger(input.labelLagDays) || input.labelLagDays < 0 || input.labelLagDays > 7300)
@@ -185,15 +215,12 @@ export function buildPlan(inputs: Inputs): Plan {
   const pC = inputs.baseline / 100;
   const pT =
     inputs.effectMode === 'relative' ? pC * (1 - inputs.effect / 100) : pC - inputs.effect / 100;
-  const share = inputs.treatmentShare / 100;
+  const { dailyC, dailyT } = dailyVolumes(inputs);
   const alpha = 1 - inputs.confidence / 100;
-  const sample = sampleSize(pC, pT, inputs.power / 100, alpha, share / (1 - share));
+  const sample = sampleSize(pC, pT, inputs.power / 100, alpha, dailyT / dailyC);
   const coverage = inputs.coverage / 100;
   const fundedC = Math.ceil(sample.nC / coverage);
   const fundedT = Math.ceil(sample.nT / coverage);
-  const dailyFunded = inputs.dailyLoans;
-  const dailyC = dailyFunded * (1 - share);
-  const dailyT = dailyFunded * share;
   let enrollmentDays = Math.ceil(Math.max(fundedC / dailyC, fundedT / dailyT));
   if (!Number.isFinite(enrollmentDays) || enrollmentDays > 36525)
     throw new Error(
@@ -257,6 +284,8 @@ export function buildPlan(inputs: Inputs): Plan {
     );
   return {
     inputs,
+    dailyC,
+    dailyT,
     pC,
     pT,
     delta: pC - pT,

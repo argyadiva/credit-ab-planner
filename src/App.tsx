@@ -19,7 +19,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { buildPlan, validationErrors, type Inputs, type Interval, type Plan } from './model';
+import { buildPlan, validationErrors, type InputKey, type Interval, type Plan } from './model';
 import {
   emptyDraft,
   essentialKeys,
@@ -29,6 +29,7 @@ import {
   parseDraft,
   restoreScenario,
   scenarioUrl,
+  switchVolumeMode,
   type Draft,
 } from './scenario';
 
@@ -157,7 +158,8 @@ function Methodology() {
         <div>
           <h3>Time until analysis</h3>
           <p>
-            Daily funded loans are split between arms. Collection stops once both arms can supply
+            Enter a total daily funded volume and allocation, or separate daily volumes for each arm.
+            Collection stops once both arms can supply
             their required usable samples. Label coverage adjusts the funded-loan requirement;
             collection is rounded up to whole calendar days.
           </p>
@@ -184,8 +186,8 @@ function Methodology() {
           <h3>Assumptions & references</h3>
           <p>
             Assumes independent borrowers with one analyzed loan each, stable daily volume and bad
-            rates, comparable funding rates across policies, and missing labels unrelated to
-            outcomes. Portfolio comparisons do not isolate a score’s effect on the same funded
+            rates, and missing labels unrelated to outcomes. Funded volumes may differ between
+            control and treatment. Portfolio comparisons do not isolate a score’s effect on the same funded
             borrowers.
           </p>
           <p>
@@ -360,13 +362,12 @@ function WeeklyTable({ plan }: { plan: Plan }) {
 
 export default function App() {
   const [draft, setDraft] = useState<Draft>(starter.draft);
-  const [touched, setTouched] = useState<Partial<Record<keyof Inputs, boolean>>>({});
+  const [touched, setTouched] = useState<Partial<Record<InputKey, boolean>>>({});
   const [advancedOpen, setAdvancedOpen] = useState(
     Boolean(
       starter.draft.startDate ||
       starter.draft.outcome ||
-      starter.draft.coverage !== '100' ||
-      starter.draft.treatmentShare !== '50',
+      starter.draft.coverage !== '100',
     ),
   );
   const [linkError, setLinkError] = useState(starter.error);
@@ -388,7 +389,8 @@ export default function App() {
     }
   }, [draft]);
   const { plan, errors } = calculation;
-  const entered = essentialKeys.filter((key) => draft[key].trim()).length;
+  const requiredKeys = essentialKeys(draft);
+  const entered = requiredKeys.filter((key) => draft[key].trim()).length;
   useEffect(() => {
     if (notice) {
       const timer = setTimeout(() => setNotice(''), 4000);
@@ -400,7 +402,7 @@ export default function App() {
     setShareLink('');
     setLinkError(null);
   };
-  const fieldError = (key: keyof Inputs) =>
+  const fieldError = (key: InputKey) =>
     draft[key].trim() || touched[key] ? errors[key] : undefined;
   const field = (
     key: keyof Draft,
@@ -468,7 +470,7 @@ export default function App() {
         : Number(draft.baseline) - Number(draft.effect)
       : null;
   const advancedErrors = Boolean(
-    errors.coverage || errors.treatmentShare || errors.startDate || errors.outcome,
+    errors.coverage || errors.startDate || errors.outcome,
   );
 
   return (
@@ -530,7 +532,7 @@ export default function App() {
               </button>
             </div>
             <p className="input-intro">
-              Six inputs. Results update as you type.
+              Results update as you type.
               <br />
               <button className="text-button" onClick={loadExample}>
                 Try an example
@@ -576,11 +578,54 @@ export default function App() {
                   hint: 'For a two-sided test.',
                 })}
               </div>
-              {field('dailyLoans', 'Funded loans per day', {
-                suffix: '/ day',
-                placeholder: 'e.g. 500',
-                hint: 'Total across control and treatment, per calendar day.',
-              })}
+              <fieldset className="volume-mode">
+                <legend>Funded-loan volume</legend>
+                <div className="volume-options">
+                  {(['total', 'separate'] as const).map((mode) => (
+                    <label key={mode}>
+                      <input
+                        type="radio"
+                        name="volume-mode"
+                        value={mode}
+                        checked={draft.volumeMode === mode}
+                        onChange={() => {
+                          setDraft((previous) => switchVolumeMode(previous, mode));
+                          setTouched((previous) => ({ ...previous, dailyLoans: false, treatmentShare: false, controlDailyLoans: false, treatmentDailyLoans: false }));
+                          setShareLink('');
+                          setLinkError(null);
+                        }}
+                      />
+                      {mode === 'total' ? 'Total + allocation' : 'Separate volumes'}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              {draft.volumeMode === 'total' ? (
+                <>
+                  {field('dailyLoans', 'Total funded loans per day', {
+                    suffix: '/ day',
+                    placeholder: 'e.g. 500',
+                    hint: 'Total across control and treatment, per calendar day.',
+                  })}
+                  {field('treatmentShare', 'Treatment allocation', {
+                    suffix: '%',
+                    hint: 'Share of funded loans in treatment. Control gets the rest.',
+                  })}
+                </>
+              ) : (
+                <>
+                  {field('controlDailyLoans', 'Control funded loans per day', {
+                    suffix: '/ day',
+                    placeholder: 'e.g. 300',
+                    hint: 'Expected daily average funded under the control policy.',
+                  })}
+                  {field('treatmentDailyLoans', 'Treatment funded loans per day', {
+                    suffix: '/ day',
+                    placeholder: 'e.g. 200',
+                    hint: 'Expected daily average funded under the treatment policy.',
+                  })}
+                </>
+              )}
               {field('labelLagDays', 'Total label delay', {
                 suffix: 'days',
                 placeholder: 'e.g. 97',
@@ -602,16 +647,10 @@ export default function App() {
                   </span>
                 </summary>
                 <div className="advanced-body">
-                  <div className="field-row">
-                    {field('treatmentShare', 'Treatment allocation', {
-                      suffix: '%',
-                      hint: 'Control gets the remaining share.',
-                    })}
-                    {field('coverage', 'Usable label coverage', {
-                      suffix: '%',
-                      hint: 'Expected share with a final usable label.',
-                    })}
-                  </div>
+                  {field('coverage', 'Usable label coverage', {
+                    suffix: '%',
+                    hint: 'Expected share with a final usable label in each arm.',
+                  })}
                   {field('startDate', 'Start date', {
                     type: 'date',
                     optional: true,
@@ -665,10 +704,10 @@ export default function App() {
               <span className={`status-indicator${plan ? ' ready' : ''}`} />
               {plan
                 ? `Calculated for ${draft.confidence}% confidence and ${draft.power}% power`
-                : Object.keys(errors).some((key) => Boolean(draft[key as keyof Draft].trim())) &&
-                    entered === essentialKeys.length
+                : Object.keys(errors).some((key) => Boolean(draft[key as InputKey].trim())) &&
+                    entered === requiredKeys.length
                   ? 'Check the highlighted assumptions to calculate your results.'
-                  : `${entered} of 6 essential inputs entered`}
+                  : `${entered} of ${requiredKeys.length} essential inputs entered`}
             </div>
             {plan ? (
               <>
@@ -740,9 +779,10 @@ export default function App() {
                 <div className="assumption-strip">
                   <Info size={15} />
                   <p>
-                    Assumes {100 - plan.inputs.treatmentShare}% control /{' '}
-                    {plan.inputs.treatmentShare}% treatment and {plan.inputs.coverage}% usable
-                    labels.
+                    {count(plan.dailyC)} control and {count(plan.dailyT)} treatment funded loans/day.{' '}
+                    Funded split: {((plan.dailyC / (plan.dailyC + plan.dailyT)) * 100).toFixed(1)}% control /{' '}
+                    {((plan.dailyT / (plan.dailyC + plan.dailyT)) * 100).toFixed(1)}% treatment.{' '}
+                    Assumes {plan.inputs.coverage}% usable labels in each arm.
                     {plan.inputs.coverage < 100 &&
                       ` Funded target: ${count(plan.fundedC)} control / ${count(plan.fundedT)} treatment.`}
                   </p>
@@ -755,16 +795,17 @@ export default function App() {
                 <section className="panel chart-panel">
                   <div className="section-heading">
                     <div>
-                      <h2>Projected weekly confidence intervals</h2>
-                      <p>How precision changes as more loan outcomes become usable.</p>
+                      <h2>Projected bad-loan rates</h2>
+                      <p>Control and treatment rates, with uncertainty as labels mature.</p>
                     </div>
                   </div>
                   <div className="chart-meta">
-                    <span>Bad-rate reduction · percentage points</span>
-                    <span>
-                      <i />
-                      {plan.inputs.confidence}% interval
-                    </span>
+                    <span>Bad-loan rate · %</span>
+                    <div className="chart-legend" aria-label="Chart legend">
+                      <span><i className="control-swatch" />Control baseline</span>
+                      <span><i className="treatment-swatch" />Expected treatment</span>
+                      <span>{plan.inputs.confidence}% confidence bands</span>
+                    </div>
                   </div>
                   <Suspense
                     fallback={<div className="chart-loading">Preparing the projection…</div>}
@@ -774,8 +815,9 @@ export default function App() {
                   <div className="chart-note">
                     <Info size={15} />
                     <p>
-                      Centered on your assumed reduction of <strong>{points(plan.delta)}</strong>.
-                      Positive values mean fewer bad loans. Actual experiment estimates will vary.
+                      Control stays at the assumed baseline of <strong>{percent(plan.pC)}</strong> and
+                      treatment at <strong>{percent(plan.pT)}</strong>. Bands narrow as usable samples
+                      grow. These are projected rates; actual experiment estimates will vary.
                     </p>
                   </div>
                 </section>
@@ -794,15 +836,15 @@ export default function App() {
                 <h2>
                   {calculation.failure
                     ? 'This scenario needs an adjustment'
-                    : entered === essentialKeys.length
+                    : entered === requiredKeys.length
                       ? 'Check your assumptions.'
-                      : 'A clear answer starts with six inputs.'}
+                      : 'A clear answer starts with your assumptions.'}
                 </h2>
                 <p>
                   {calculation.failure ??
-                    (entered === essentialKeys.length
+                    (entered === requiredKeys.length
                       ? 'Correct the highlighted assumptions. The sample size and timeline will update automatically.'
-                      : 'Enter your baseline, expected reduction, power, confidence, daily loans, and label delay.')}
+                      : 'Enter your baseline, expected reduction, power, confidence, funded-loan volumes, and label delay.')}
                 </p>
                 {!calculation.failure && (
                   <button className="example-button" onClick={loadExample}>

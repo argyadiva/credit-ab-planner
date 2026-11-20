@@ -1,15 +1,18 @@
-import { validDate, type Inputs, type Plan } from './model';
+import { dailyVolumes, validationErrors, validDate, type InputKey, type Inputs, type Plan, type VolumeMode } from './model';
 
-export type Draft = Record<keyof Inputs, string>;
-export const essentialKeys = [
+export type Draft = Record<InputKey, string>;
+const commonEssentialKeys = [
   'baseline',
   'effect',
   'power',
   'confidence',
-  'dailyLoans',
   'labelLagDays',
 ] as const;
-export const numericKeys = [...essentialKeys, 'treatmentShare', 'coverage'] as const;
+export const essentialKeys = (draft: Draft): InputKey[] => [
+  ...commonEssentialKeys,
+  ...(draft.volumeMode === 'separate' ? ['controlDailyLoans', 'treatmentDailyLoans'] as const : ['dailyLoans'] as const),
+];
+export const numericKeys = [...commonEssentialKeys, 'dailyLoans', 'treatmentShare', 'controlDailyLoans', 'treatmentDailyLoans', 'coverage'] as const;
 
 export const emptyDraft = (): Draft => ({
   baseline: '',
@@ -17,7 +20,10 @@ export const emptyDraft = (): Draft => ({
   effectMode: 'relative',
   power: '',
   confidence: '',
+  volumeMode: 'total',
   dailyLoans: '',
+  controlDailyLoans: '',
+  treatmentDailyLoans: '',
   labelLagDays: '',
   treatmentShare: '50',
   coverage: '100',
@@ -26,13 +32,40 @@ export const emptyDraft = (): Draft => ({
 });
 
 export function parseDraft(draft: Draft): Inputs {
-  const parsed = {
-    ...draft,
+  const number = (key: InputKey) => draft[key].trim() === '' ? NaN : Number(draft[key]);
+  const common = {
+    baseline: number('baseline'),
+    effect: number('effect'),
+    effectMode: draft.effectMode as Inputs['effectMode'],
+    power: number('power'),
+    confidence: number('confidence'),
+    labelLagDays: number('labelLagDays'),
+    coverage: number('coverage'),
     startDate: draft.startDate.trim() || undefined,
     outcome: draft.outcome.trim() || undefined,
-  } as unknown as Inputs;
-  for (const key of numericKeys) parsed[key] = draft[key].trim() === '' ? NaN : Number(draft[key]);
-  return parsed;
+  };
+  return draft.volumeMode === 'separate'
+    ? { ...common, volumeMode: 'separate', controlDailyLoans: number('controlDailyLoans'), treatmentDailyLoans: number('treatmentDailyLoans') }
+    : { ...common, volumeMode: draft.volumeMode as 'total', dailyLoans: number('dailyLoans'), treatmentShare: number('treatmentShare') };
+}
+
+export function switchVolumeMode(draft: Draft, mode: VolumeMode): Draft {
+  if (mode === draft.volumeMode) return draft;
+  const inputs = parseDraft(draft);
+  const errors = validationErrors(inputs);
+  const invalidVolume = ['volumeMode', 'dailyLoans', 'treatmentShare', 'controlDailyLoans', 'treatmentDailyLoans']
+    .some((key) => errors[key as InputKey]);
+  const { dailyC, dailyT } = dailyVolumes(inputs);
+  if (mode === 'separate') return {
+    ...draft, volumeMode: mode,
+    controlDailyLoans: invalidVolume ? '' : String(dailyC),
+    treatmentDailyLoans: invalidVolume ? '' : String(dailyT),
+  };
+  return {
+    ...draft, volumeMode: mode,
+    dailyLoans: invalidVolume ? '' : String(dailyC + dailyT),
+    treatmentShare: invalidVolume ? '' : String((dailyT / (dailyC + dailyT)) * 100),
+  };
 }
 
 export function exampleDraft(): Draft {
@@ -52,18 +85,24 @@ export function restoreScenario(search: string): { draft: Draft; error: string |
   const params = new URLSearchParams(search);
   const version = params.get('v');
   if (!version) return { draft, error: null };
-  if (version !== '1' && version !== '2')
+  if (version !== '1' && version !== '2' && version !== '3')
     return {
       draft,
       error:
         'This scenario link uses an unsupported version. Enter your assumptions or try the example.',
     };
   for (const key of Object.keys(draft) as (keyof Draft)[]) {
+    if (version !== '3' && ['volumeMode', 'controlDailyLoans', 'treatmentDailyLoans'].includes(key)) continue;
     if (version === '1' && (key === 'dailyLoans' || key === 'labelLagDays')) continue;
     const value = params.get(key);
     if (value !== null) draft[key] = value.slice(0, 220);
   }
   let error: string | null = null;
+  if (version === '3' && !['total', 'separate'].includes(params.get('volumeMode') ?? '')) {
+    draft.volumeMode = 'total';
+    draft.dailyLoans = '';
+    error = 'The shared link has an invalid or missing volume mode. Enter your funded-loan assumptions below.';
+  }
   if (version === '1') {
     const legacyNumber = (key: string) => {
       const value = params.get(key);
@@ -101,7 +140,9 @@ export function restoreScenario(search: string): { draft: Draft; error: string |
   for (const key of numericKeys) {
     if (draft[key].trim() && !Number.isFinite(Number(draft[key]))) {
       draft[key] = '';
-      error = 'The shared link contains an invalid number. Correct the missing assumption below.';
+      if (essentialKeys(draft).includes(key) || key === 'coverage' ||
+        (key === 'treatmentShare' && draft.volumeMode === 'total'))
+        error = 'The shared link contains an invalid number. Correct the missing assumption below.';
     }
   }
   if (!['relative', 'absolute'].includes(draft.effectMode)) {
@@ -116,7 +157,7 @@ export function scenarioUrl(inputs: Inputs, base: string): string {
   const url = new URL(base);
   url.search = '';
   url.hash = '';
-  url.searchParams.set('v', '2');
+  url.searchParams.set('v', '3');
   for (const [key, value] of Object.entries(inputs))
     if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
   return url.toString();
@@ -149,6 +190,8 @@ export function exportCsv(plan: Plan) {
   for (const [key, value] of Object.entries(plan.inputs))
     if (value !== undefined) rows.push([key, value]);
   rows.push(
+    ['resolved_control_daily_loans', plan.dailyC],
+    ['resolved_treatment_daily_loans', plan.dailyT],
     ['required_labels_control', plan.targetC],
     ['required_labels_treatment', plan.targetT],
     ['required_funded_control', plan.fundedC],

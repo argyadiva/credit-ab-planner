@@ -5,7 +5,6 @@ import {
   ErrorBar,
   Line,
   ReferenceArea,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,33 +12,44 @@ import {
 } from 'recharts';
 import type { Plan } from './model';
 
-export default function ForecastChart({ plan }: { plan: Plan }) {
-  const data = plan.weeks.map((week) => ({
+const controlColor = '#526fa4';
+const treatmentColor = '#247457';
+
+export function forecastData(plan: Plan) {
+  return plan.weeks.map((week) => ({
     day: week.day,
-    reduction: week.expectedDifference ? plan.delta * 100 : null,
-    interval: week.expectedDifference?.map((value) => value * 100) ?? null,
-    error: week.expectedDifference
-      ? [
-          (plan.delta - week.expectedDifference[0]) * 100,
-          (week.expectedDifference[1] - plan.delta) * 100,
-        ]
+    control: week.expectedC ? plan.pC * 100 : null,
+    treatment: week.expectedT ? plan.pT * 100 : null,
+    controlInterval: week.expectedC?.map((value) => value * 100) ?? null,
+    treatmentInterval: week.expectedT?.map((value) => value * 100) ?? null,
+    controlError: week.expectedC
+      ? [(plan.pC - week.expectedC[0]) * 100, (week.expectedC[1] - plan.pC) * 100]
+      : null,
+    treatmentError: week.expectedT
+      ? [(plan.pT - week.expectedT[0]) * 100, (week.expectedT[1] - plan.pT) * 100]
       : null,
   }));
-  const singleEstimate = data.filter((row) => row.reduction !== null).length === 1;
+}
+
+export default function ForecastChart({ plan }: { plan: Plan }) {
+  const data = forecastData(plan);
+  const singleControl = data.filter((row) => row.control !== null).length === 1;
+  const singleTreatment = data.filter((row) => row.treatment !== null).length === 1;
+  const bounds = data.flatMap((row) => [
+    ...(row.controlInterval ?? []),
+    ...(row.treatmentInterval ?? []),
+  ]);
+  const min = Math.min(...bounds);
+  const max = Math.max(...bounds);
+  const padding = Math.max((max - min) * 0.08, 0.1);
   return (
     <div
       className="forecast-plot"
       role="img"
-      aria-label={`Projected ${plan.inputs.confidence}% confidence interval for the bad-rate reduction over ${plan.finalDay} ${plan.finalDay === 1 ? 'day' : 'days'}. Positive reduction means fewer bad loans. The weekly table provides the numeric values.`}
+      aria-label={`Projected control baseline ${(plan.pC * 100).toFixed(2)}% and treatment bad rate ${(plan.pT * 100).toFixed(2)}%, with ${plan.inputs.confidence}% confidence bands over ${plan.finalDay} ${plan.finalDay === 1 ? 'day' : 'days'}. Assumed rates stay constant while uncertainty narrows as usable samples grow. The weekly table provides the numeric values.`}
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 24, right: 18, left: 0, bottom: 8 }}>
-          <defs>
-            <linearGradient id="forecast-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#40947a" stopOpacity={0.26} />
-              <stop offset="100%" stopColor="#40947a" stopOpacity={0.08} />
-            </linearGradient>
-          </defs>
           <CartesianGrid vertical={false} stroke="#e5ece8" strokeDasharray="3 5" />
           <XAxis
             dataKey="day"
@@ -52,24 +62,24 @@ export default function ForecastChart({ plan }: { plan: Plan }) {
             minTickGap={30}
           />
           <YAxis
-            tickFormatter={(value) => Number(value).toFixed(1)}
+            type="number"
+            domain={[Math.max(0, min - padding), Math.min(100, max + padding)]}
+            allowDataOverflow
+            tickFormatter={(value) => `${Number(value).toFixed(1)}%`}
             tickLine={false}
             axisLine={false}
-            width={46}
+            width={62}
             tick={{ fontSize: 12, fill: '#64796d' }}
           />
           <Tooltip
             labelFormatter={(day) => `Day ${day} · week ${(Number(day) / 7).toFixed(1)}`}
-            formatter={(value, name) =>
-              name === 'interval'
-                ? [
-                    Array.isArray(value)
-                      ? `${Number(value[0]).toFixed(2)} to ${Number(value[1]).toFixed(2)} pp`
-                      : value,
-                    `${plan.inputs.confidence}% interval`,
-                  ]
-                : [`${Number(value).toFixed(2)} pp`, 'Assumed reduction']
-            }
+            formatter={(value, name) => {
+              const isControl = name === 'control' || name === 'controlInterval';
+              const label = isControl ? 'Control baseline' : 'Expected treatment';
+              return Array.isArray(value)
+                ? [`${Number(value[0]).toFixed(2)}% to ${Number(value[1]).toFixed(2)}%`, `${label} · ${plan.inputs.confidence}% CI`]
+                : [`${Number(value).toFixed(2)}%`, label];
+            }}
             contentStyle={{ borderRadius: 10, border: '1px solid #dbe5df', fontSize: 14 }}
           />
           {plan.lagDays > 0 && (
@@ -81,25 +91,51 @@ export default function ForecastChart({ plan }: { plan: Plan }) {
               label={{ value: 'Label delay', position: 'insideTop', fill: '#778c7f', fontSize: 12 }}
             />
           )}
-          <ReferenceLine y={0} stroke="#9baea1" strokeDasharray="5 4" />
           <Area
-            dataKey="interval"
+            dataKey="controlInterval"
             type="linear"
             stroke="none"
-            fill="url(#forecast-fill)"
+            fill={controlColor}
+            fillOpacity={0.13}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+          <Area
+            dataKey="treatmentInterval"
+            type="linear"
+            stroke="none"
+            fill={treatmentColor}
+            fillOpacity={0.15}
+            connectNulls={false}
             isAnimationActive={false}
           />
           <Line
-            dataKey="reduction"
+            dataKey="control"
             type="linear"
-            stroke="#247457"
+            stroke={controlColor}
+            strokeDasharray="6 4"
             strokeWidth={2.5}
-            dot={singleEstimate ? { r: 4 } : false}
+            dot={singleControl ? { r: 4 } : false}
             activeDot={{ r: 4 }}
+            connectNulls={false}
             isAnimationActive={false}
           >
-            {singleEstimate && (
-              <ErrorBar dataKey="error" direction="y" width={5} stroke="#247457" strokeWidth={2} />
+            {singleControl && (
+              <ErrorBar dataKey="controlError" direction="y" width={5} stroke={controlColor} strokeWidth={2} />
+            )}
+          </Line>
+          <Line
+            dataKey="treatment"
+            type="linear"
+            stroke={treatmentColor}
+            strokeWidth={2.5}
+            dot={singleTreatment ? { r: 4 } : false}
+            activeDot={{ r: 4 }}
+            connectNulls={false}
+            isAnimationActive={false}
+          >
+            {singleTreatment && (
+              <ErrorBar dataKey="treatmentError" direction="y" width={5} stroke={treatmentColor} strokeWidth={2} />
             )}
           </Line>
         </ComposedChart>
