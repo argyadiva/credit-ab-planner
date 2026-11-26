@@ -5,6 +5,8 @@ interface CommonInputs {
   effect: number;
   effectMode: 'relative' | 'absolute';
   power: number;
+  testType: TestType;
+  alpha: number;
   confidence: number;
   labelLagDays: number;
   coverage: number;
@@ -13,6 +15,7 @@ interface CommonInputs {
 }
 
 export type VolumeMode = 'total' | 'separate';
+export type TestType = 'one-sided' | 'two-sided';
 export type Inputs = CommonInputs &
   (
     | { volumeMode: 'total'; dailyLoans: number; treatmentShare: number }
@@ -94,6 +97,14 @@ export function validationErrors(input: Inputs): Partial<Record<InputKey, string
   if (!errors.baseline && !errors.effect && !between(target, 0, input.baseline))
     errors.effect = 'The target bad rate must stay above 0% and below the baseline.';
   if (!between(input.power, 50, 100)) errors.power = 'Enter power above 50% and below 100%.';
+  if (!['one-sided', 'two-sided'].includes(input.testType))
+    errors.testType = 'Select one-sided or two-sided testing.';
+  if (
+    !between(input.alpha, 0, 50) ||
+    !(input.alpha / 100 > 0) ||
+    !Number.isFinite(quantile(1 - input.alpha / 100))
+  )
+    errors.alpha = 'Enter alpha above 0% and below 50% that produces a finite critical value.';
   if (!between(input.confidence, 50, 100))
     errors.confidence = 'Enter confidence above 50% and below 100%.';
   const validVolume = (value: number) => Number.isFinite(value) && value > 0 && value <= 1e9;
@@ -128,13 +139,23 @@ export function validate(input: Inputs): string[] {
   return Object.values(validationErrors(input));
 }
 
-/** Power of a two-sided pooled-null z test; unpooled alternative variance. */
-export function powerAt(nC: number, nT: number, pC: number, pT: number, alpha: number) {
+/** Power of a pooled-null z test; unpooled alternative variance. */
+export function powerAt(
+  nC: number,
+  nT: number,
+  pC: number,
+  pT: number,
+  alpha: number,
+  testType: TestType,
+) {
   const pooled = (nC * pC + nT * pT) / (nC + nT);
   const nullSE = Math.sqrt(pooled * (1 - pooled) * (1 / nC + 1 / nT));
   const altSE = Math.sqrt((pC * (1 - pC)) / nC + (pT * (1 - pT)) / nT);
-  const threshold = quantile(1 - alpha / 2) * nullSE;
-  return cdf((pC - pT - threshold) / altSE) + cdf((-(pC - pT) - threshold) / altSE);
+  const threshold = quantile(testType === 'two-sided' ? 1 - alpha / 2 : 1 - alpha) * nullSE;
+  const improvementPower = cdf((pC - pT - threshold) / altSE);
+  return testType === 'one-sided'
+    ? improvementPower
+    : improvementPower + cdf((-(pC - pT) - threshold) / altSE);
 }
 
 export function sampleSize(
@@ -143,10 +164,12 @@ export function sampleSize(
   desiredPower: number,
   alpha: number,
   ratio: number,
+  testType: TestType,
 ) {
   let low = 1;
   let high = 2;
-  const enough = (n: number) => powerAt(n, n * ratio, pC, pT, alpha) >= desiredPower;
+  const enough = (n: number) =>
+    powerAt(n, n * ratio, pC, pT, alpha, testType) >= desiredPower;
   while (!enough(high)) {
     high *= 2;
     if (high > 1e10 || high * ratio > 1e10)
@@ -162,7 +185,7 @@ export function sampleSize(
   let nC = enough(1) ? 1 : high;
   let nT = Math.max(1, Math.ceil(nC * ratio));
   // Integer allocation can very slightly change power; never round below target.
-  while (powerAt(nC, nT, pC, pT, alpha) < desiredPower) {
+  while (powerAt(nC, nT, pC, pT, alpha, testType) < desiredPower) {
     nC++;
     nT = Math.max(1, Math.ceil(nC * ratio));
   }
@@ -170,7 +193,7 @@ export function sampleSize(
     throw new Error(
       'This allocation requires more than 10 billion labels in an arm. Use a more balanced allocation or a larger reduction.',
     );
-  return { nC, nT, power: powerAt(nC, nT, pC, pT, alpha) };
+  return { nC, nT, power: powerAt(nC, nT, pC, pT, alpha, testType) };
 }
 
 /** Fractional expected counts are supported only for the labeled precision forecast. */
@@ -217,8 +240,15 @@ export function buildPlan(inputs: Inputs): Plan {
   const pT =
     inputs.effectMode === 'relative' ? pC * (1 - inputs.effect / 100) : pC - inputs.effect / 100;
   const { dailyC, dailyT } = dailyVolumes(inputs);
-  const alpha = 1 - inputs.confidence / 100;
-  const sample = sampleSize(pC, pT, inputs.power / 100, alpha, dailyT / dailyC);
+  const alpha = inputs.alpha / 100;
+  const sample = sampleSize(
+    pC,
+    pT,
+    inputs.power / 100,
+    alpha,
+    dailyT / dailyC,
+    inputs.testType,
+  );
   const coverage = inputs.coverage / 100;
   const fundedC = Math.ceil(sample.nC / coverage);
   const fundedT = Math.ceil(sample.nT / coverage);
@@ -268,7 +298,10 @@ export function buildPlan(inputs: Inputs): Plan {
         matureC && matureT
           ? differenceInterval(matureC * pC, matureC, matureT * pT, matureT, confidence)
           : null,
-      projectedPower: matureC && matureT ? powerAt(matureC, matureT, pC, pT, alpha) : null,
+      projectedPower:
+        matureC && matureT
+          ? powerAt(matureC, matureT, pC, pT, alpha, inputs.testType)
+          : null,
     };
   });
   const warnings: string[] = [];

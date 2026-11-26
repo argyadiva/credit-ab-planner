@@ -27,6 +27,8 @@ const inputs: Inputs = {
   effect: 10,
   effectMode: 'relative',
   power: 80,
+  testType: 'two-sided',
+  alpha: 5,
   confidence: 95,
   volumeMode: 'total',
   dailyLoans: 500,
@@ -49,7 +51,7 @@ describe('statistical reference checks', () => {
     [0.25, 34110, 8528],
     [4, 8338, 33352],
   ])('matches SciPy sample sizes for ratio %s', (ratio, nC, nT) => {
-    const sample = sampleSize(0.1, 0.09, 0.8, 0.05, ratio);
+    const sample = sampleSize(0.1, 0.09, 0.8, 0.05, ratio, 'two-sided');
     expect(sample.nC).toBe(nC);
     expect(sample.nT).toBe(nT);
     expect(sample.power).toBeGreaterThanOrEqual(0.8);
@@ -81,11 +83,39 @@ describe('statistical reference checks', () => {
     expect(large[1] - large[0]).toBeLessThan(small[1] - small[0]);
   });
 
-  it('requires more samples for higher confidence, higher power, or smaller effects', () => {
+  it('separates interval confidence from test sample size and responds to power or effect', () => {
     const base = buildPlan(inputs);
-    expect(buildPlan({ ...inputs, confidence: 99 }).targetC).toBeGreaterThan(base.targetC);
+    const higherIntervalConfidence = buildPlan({ ...inputs, confidence: 99 });
+    expect(higherIntervalConfidence.targetC).toBe(base.targetC);
+    expect(higherIntervalConfidence.weeks.at(-1)!.projectedPower).toBe(base.weeks.at(-1)!.projectedPower);
+    expect(higherIntervalConfidence.weeks.at(-1)!.expectedC).not.toEqual(base.weeks.at(-1)!.expectedC);
+    const oneSided = buildPlan({ ...inputs, testType: 'one-sided' });
+    expect(oneSided.targetC).toBeLessThan(base.targetC);
+    const sameCountIntervals = (plan: ReturnType<typeof buildPlan>) =>
+      differenceInterval(100, 1000, 90, 1000, plan.inputs.confidence / 100);
+    expect(sameCountIntervals(oneSided)).toEqual(sameCountIntervals(base));
     expect(buildPlan({ ...inputs, power: 90 }).targetC).toBeGreaterThan(base.targetC);
     expect(buildPlan({ ...inputs, effect: 5 }).targetC).toBeGreaterThan(base.targetC);
+  });
+
+  it('uses the selected tails and alpha for independent-proportions power and sample size', () => {
+    const twoSided = sampleSize(0.1, 0.09, 0.8, 0.05, 1, 'two-sided');
+    const oneSidedFive = sampleSize(0.1, 0.09, 0.8, 0.05, 1, 'one-sided');
+    const oneSidedTwoFive = sampleSize(0.1, 0.09, 0.8, 0.025, 1, 'one-sided');
+    expect(twoSided.nC).toBe(13495);
+    expect(oneSidedFive.nC).toBe(10630);
+    expect(oneSidedTwoFive.nC).toBe(13495);
+    expect(oneSidedFive.nC).toBeLessThan(twoSided.nC);
+    expect(powerAt(13495, 13495, 0.1, 0.09, 0.05, 'one-sided')).toBeGreaterThanOrEqual(0.8);
+    expect(powerAt(13495, 13495, 0.09, 0.1, 0.05, 'one-sided')).toBeLessThan(0.01);
+    expect(powerAt(13495, 13495, 0.09, 0.1, 0.05, 'two-sided')).toBeGreaterThanOrEqual(0.8);
+    expect(sampleSize(0.1, 0.09, 0.8, 0.01, 1, 'one-sided').nC).toBeGreaterThan(oneSidedFive.nC);
+  });
+
+  it('validates alpha and test type', () => {
+    for (const alpha of [0, 50, NaN, Infinity, Number.MIN_VALUE])
+      expect(validate({ ...inputs, alpha }).some((error) => error.includes('alpha'))).toBe(true);
+    expect(validate({ ...inputs, testType: 'invalid' as Inputs['testType'] }).some((error) => error.includes('one-sided or two-sided'))).toBe(true);
   });
 });
 
@@ -182,11 +212,13 @@ describe('cohort timing and label coverage', () => {
 });
 
 describe('validation and portable scenarios', () => {
-  it('defaults power and confidence while keeping scenario assumptions blank', () => {
+  it('defaults test settings while keeping scenario assumptions blank', () => {
     const draft = emptyDraft();
     expect(draft.baseline).toBe('');
     expect(draft.effect).toBe('');
     expect(draft.power).toBe('80');
+    expect(draft.testType).toBe('two-sided');
+    expect(draft.alpha).toBe('5');
     expect(draft.confidence).toBe('95');
     expect(draft.dailyLoans).toBe('');
     expect(draft.labelLagDays).toBe('');
@@ -206,14 +238,16 @@ describe('validation and portable scenarios', () => {
     }
   });
 
-  it('round trips total-volume inputs in version-3 URLs', () => {
+  it('round trips total-volume inputs in version-4 URLs', () => {
     const original = { ...inputs, outcome: '30+ DPD, observed & complete' };
     const url = scenarioUrl(original, 'https://example.com/?old=true#old');
-    expect(new URL(url).searchParams.get('v')).toBe('3');
+    expect(new URL(url).searchParams.get('v')).toBe('4');
     expect(url).not.toContain('seed');
     const restored = restoreScenario(new URL(url).search);
     expect(restored.error).toBeNull();
     expect(parseDraft(restored.draft)).toEqual(original);
+    expect(new URL(url).searchParams.get('testType')).toBe('two-sided');
+    expect(new URL(url).searchParams.get('alpha')).toBe('5');
     expect(restoreScenario('?v=900').error).toContain('unsupported');
     expect(
       validate(parseDraft(restoreScenario('?v=1&baseline=oops').draft)).length,
@@ -283,7 +317,7 @@ describe('validation and portable scenarios', () => {
 
 describe('separate daily funded volumes', () => {
   const separate = (controlDailyLoans: number, treatmentDailyLoans: number): Inputs => ({
-    baseline: 10, effect: 10, effectMode: 'relative', power: 80, confidence: 95,
+    baseline: 10, effect: 10, effectMode: 'relative', power: 80, testType: 'two-sided', alpha: 5, confidence: 95,
     coverage: 100, labelLagDays: 97, volumeMode: 'separate',
     controlDailyLoans, treatmentDailyLoans,
   });
@@ -355,7 +389,7 @@ describe('separate daily funded volumes', () => {
   it('round trips separate-volume links and exports the selected mode and resolved volumes', () => {
     const original = separate(300, 100);
     const url = scenarioUrl(original, 'https://example.com');
-    expect(new URL(url).searchParams.get('v')).toBe('3');
+    expect(new URL(url).searchParams.get('v')).toBe('4');
     expect(new URL(url).searchParams.has('dailyLoans')).toBe(false);
     expect(new URL(url).searchParams.has('treatmentShare')).toBe(false);
     const restored = restoreScenario(new URL(url).search);
@@ -365,6 +399,9 @@ describe('separate daily funded volumes', () => {
     expect(csv).toContain('"volumeMode","separate"');
     expect(csv).toContain('"resolved_control_daily_loans","300"');
     expect(csv).toContain('"resolved_treatment_daily_loans","100"');
+    expect(csv).toContain('"testType","two-sided"');
+    expect(csv).toContain('"alpha","5"');
+    expect(csv).toContain('two-sided fixed-horizon planning at alpha 5%');
     expect(csv).toContain('forecast_reduction_ci_low');
   });
 
@@ -428,7 +465,7 @@ describe('goal-based detection power projections', () => {
     const final = plan.weeks.at(-1)!;
     expect(final.projectedPower).toBeGreaterThanOrEqual(inputs.power / 100);
     expect(final.projectedPower).toBeCloseTo(
-      powerAt(final.matureC, final.matureT, plan.pC, plan.pT, 0.05), 12,
+      powerAt(final.matureC, final.matureT, plan.pC, plan.pT, 0.05, 'two-sided'), 12,
     );
   });
 
@@ -469,8 +506,9 @@ describe('goal-based detection power projections', () => {
     expect(plan.weeks[1].projectedPower).toBeGreaterThanOrEqual(0.8);
   });
 
-  it.each(['1', '2', '3'])('preserves explicit settings and missing-assumption errors in version %s links', (version) => {
+  it.each(['1', '2', '3'])('preserves legacy settings and derives two-sided alpha in version %s links', (version) => {
     const original = { ...inputs, power: 90, confidence: 99 };
+    const expectedLegacy = { ...original, alpha: 1 };
     const url = new URL(scenarioUrl(original, 'https://example.com'));
     url.searchParams.set('v', version);
     if (version === '1') {
@@ -478,14 +516,41 @@ describe('goal-based detection power projections', () => {
         url.searchParams.set(key, value);
     }
     const restored = restoreScenario(url.search);
-    expect(parseDraft(restored.draft)).toEqual(original);
+    expect(parseDraft(restored.draft)).toEqual(expectedLegacy);
     url.searchParams.delete('power');
     url.searchParams.delete('confidence');
     const incomplete = restoreScenario(url.search);
     expect(incomplete.draft.power).toBe('');
     expect(incomplete.draft.confidence).toBe('');
-    expect(validate(parseDraft(incomplete.draft))).toHaveLength(2);
+    expect(incomplete.draft.alpha).toBe('');
+    expect(validate(parseDraft(incomplete.draft))).toHaveLength(3);
     expect(restoreScenario('').draft).toEqual(emptyDraft());
+  });
+
+  it('requires explicit test settings in version-4 links and supports one-sided separate-volume round trips', () => {
+    const original: Inputs = {
+      baseline: inputs.baseline,
+      effect: inputs.effect,
+      effectMode: inputs.effectMode,
+      power: inputs.power,
+      testType: 'one-sided',
+      alpha: 2.5,
+      confidence: inputs.confidence,
+      volumeMode: 'separate',
+      controlDailyLoans: 300,
+      treatmentDailyLoans: 200,
+      labelLagDays: inputs.labelLagDays,
+      coverage: inputs.coverage,
+    };
+    const url = new URL(scenarioUrl(original, 'https://example.com'));
+    expect(parseDraft(restoreScenario(url.search).draft)).toEqual({ ...original, startDate: undefined, outcome: undefined });
+    url.searchParams.delete('alpha');
+    const missingAlpha = parseDraft(restoreScenario(url.search).draft);
+    expect(validate(missingAlpha).some((error) => error.includes('alpha'))).toBe(true);
+    url.searchParams.set('alpha', '2.5');
+    url.searchParams.delete('testType');
+    const missingType = parseDraft(restoreScenario(url.search).draft);
+    expect(validate(missingType).some((error) => error.includes('one-sided or two-sided'))).toBe(true);
   });
 
   it('appends power as a fraction in CSV while retaining existing weekly columns and nulls', () => {

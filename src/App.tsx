@@ -147,9 +147,9 @@ function Methodology() {
         <div>
           <h3>Sample size</h3>
           <p>
-            A two-sided z-test for independent bad-loan proportions estimates the labeled sample
-            needed at your chosen power and confidence. The calculation uses pooled null variance
-            and unpooled alternative variance, solves numerically, and rounds targets up.
+            The selected one-sided or two-sided z-test for independent bad-loan proportions estimates
+            the labeled sample needed at your chosen power and alpha. The calculation uses pooled
+            null variance and unpooled alternative variance, solves numerically, and rounds targets up.
           </p>
           <p>
             Positive reduction means control bad rate minus treatment bad rate. Relative percent and
@@ -158,7 +158,9 @@ function Methodology() {
           <p>
             The goal is to detect the assumed improvement versus no difference. Power is the chance
             of detecting a difference if that improvement is real; it does not prove the improvement
-            exceeds a minimum threshold. Confidence sets the two-sided significance level.
+            exceeds a minimum threshold. Alpha sets the test significance level; one-sided testing
+            checks only for a reduction, while two-sided testing checks for a change in either
+            direction.
           </p>
         </div>
         <div>
@@ -246,7 +248,10 @@ function WeeklyTable({ plan }: { plan: Plan }) {
       <div className="section-heading">
         <div>
           <h2>Week-by-week projection</h2>
-          <p>{plan.inputs.confidence}% intervals and detection power based on your assumed bad rates.</p>
+          <p>
+            {plan.inputs.confidence}% two-sided intervals; detection power uses a {plan.inputs.testType}{' '}
+            test at {plan.inputs.alpha}% alpha.
+          </p>
         </div>
         <span className="small-label">C = control · T = treatment</span>
       </div>
@@ -288,17 +293,17 @@ function WeeklyTable({ plan }: { plan: Plan }) {
               <th>
                 Control bad rate
                 <br />
-                <small>{plan.inputs.confidence}% CI · %</small>
+                <small>{plan.inputs.confidence}% two-sided CI · %</small>
               </th>
               <th>
                 Treatment bad rate
                 <br />
-                <small>{plan.inputs.confidence}% CI · %</small>
+                <small>{plan.inputs.confidence}% two-sided CI · %</small>
               </th>
               <th>
                 Bad-rate reduction
                 <br />
-                <small>{plan.inputs.confidence}% CI · pp</small>
+                <small>{plan.inputs.confidence}% two-sided CI · pp</small>
               </th>
               <th>
                 Detection power
@@ -391,6 +396,7 @@ export default function App() {
     Boolean(
       starter.draft.startDate ||
       starter.draft.outcome ||
+      starter.draft.confidence !== '95' ||
       starter.draft.coverage !== '100',
     ),
   );
@@ -427,7 +433,11 @@ export default function App() {
     setLinkError(null);
   };
   const fieldError = (key: InputKey) =>
-    draft[key].trim() || touched[key] ? errors[key] : undefined;
+    draft[key].trim() || touched[key]
+      ? key === 'alpha'
+        ? errors.alpha ?? errors.testType
+        : errors[key]
+      : undefined;
   const field = (
     key: keyof Draft,
     label: string,
@@ -494,7 +504,7 @@ export default function App() {
         : Number(draft.baseline) - Number(draft.effect)
       : null;
   const advancedErrors = Boolean(
-    errors.coverage || errors.startDate || errors.outcome,
+    errors.confidence || errors.coverage || errors.startDate || errors.outcome,
   );
 
   return (
@@ -597,10 +607,23 @@ export default function App() {
                   placeholder: 'e.g. 80',
                   hint: 'Chance of detecting a difference if the assumed improvement is real.',
                 })}
-                {field('confidence', 'Confidence level', {
+                {field('alpha', 'Significance level (alpha)', {
                   suffix: '%',
-                  placeholder: 'e.g. 95',
-                  hint: 'Sets the two-sided significance level: 100% minus confidence.',
+                  placeholder: 'e.g. 5',
+                  hint: 'Choose the test direction and alpha before reviewing experiment results. One-sided alpha controls false declarations of improvement; two-sided alpha covers false declarations of a difference in either direction.',
+                  children: (
+                    <>
+                      <select
+                        aria-label="Test type"
+                        value={draft.testType}
+                        onChange={(event) => change('testType', event.target.value)}
+                      >
+                        <option value="two-sided">Two-sided</option>
+                        <option value="one-sided">One-sided · improvement</option>
+                      </select>
+                      <ChevronDown className="select-chevron" size={14} />
+                    </>
+                  ),
                 })}
               </div>
               <fieldset className="volume-mode">
@@ -672,6 +695,11 @@ export default function App() {
                   </span>
                 </summary>
                 <div className="advanced-body">
+                  {field('confidence', 'Confidence level for displayed intervals', {
+                    suffix: '%',
+                    placeholder: 'e.g. 95',
+                    hint: 'Controls the two-sided forecast intervals only. It is separate from test alpha and does not determine whether the treatment wins.',
+                  })}
                   {field('coverage', 'Usable label coverage', {
                     suffix: '%',
                     hint: 'Expected share with a final usable label in each arm.',
@@ -728,7 +756,7 @@ export default function App() {
             <div className="calculation-status" role="status" aria-live="polite">
               <span className={`status-indicator${plan ? ' ready' : ''}`} />
               {plan
-                ? `Calculated for ${draft.confidence}% confidence and ${draft.power}% power`
+                ? `Calculated with a ${draft.testType} test at ${draft.alpha}% alpha and ${draft.power}% power`
                 : Object.keys(errors).some((key) => Boolean(draft[key as InputKey].trim())) &&
                     entered === requiredKeys.length
                   ? 'Check the highlighted assumptions to calculate your results.'
@@ -741,9 +769,10 @@ export default function App() {
                   <p>
                     Detect a reduction from <strong>{percent(plan.pC)}</strong> to{' '}
                     <strong>{percent(plan.pT)}</strong> bad rate with{' '}
-                    <strong>{plan.inputs.power}% power</strong> at a two-sided{' '}
-                    <strong>{Number((100 - plan.inputs.confidence).toFixed(4))}% significance level</strong>{' '}
-                    ({plan.inputs.confidence}% confidence).
+                    <strong>{plan.inputs.power}% power</strong> using a{' '}
+                    <strong>{plan.inputs.testType} test at {plan.inputs.alpha}% alpha</strong>. Displayed
+                    intervals use{' '}
+                    <strong>{plan.inputs.confidence}% two-sided confidence</strong>.
                   </p>
                   <p className="goal-explanation">
                     More mature outcomes improve detection power and precision. They do not increase
@@ -843,7 +872,7 @@ export default function App() {
                     <div className="chart-legend" aria-label="Chart legend">
                       <span><i className="control-swatch" />Control baseline</span>
                       <span><i className="treatment-swatch" />Expected treatment</span>
-                      <span>{plan.inputs.confidence}% confidence bands</span>
+                      <span>{plan.inputs.confidence}% two-sided confidence bands</span>
                     </div>
                   </div>
                   <Suspense

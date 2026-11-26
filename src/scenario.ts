@@ -1,15 +1,25 @@
-import { dailyVolumes, validationErrors, validDate, type InputKey, type Inputs, type Plan, type VolumeMode } from './model';
+import {
+  dailyVolumes,
+  validationErrors,
+  validDate,
+  type InputKey,
+  type Inputs,
+  type Plan,
+  type VolumeMode,
+} from './model';
 
 export type Draft = Record<InputKey, string>;
 const commonEssentialKeys = [
   'baseline',
   'effect',
   'power',
+  'alpha',
   'confidence',
   'labelLagDays',
 ] as const;
 export const essentialKeys = (draft: Draft): InputKey[] => [
   ...commonEssentialKeys,
+  'testType',
   ...(draft.volumeMode === 'separate' ? ['controlDailyLoans', 'treatmentDailyLoans'] as const : ['dailyLoans'] as const),
 ];
 export const numericKeys = [...commonEssentialKeys, 'dailyLoans', 'treatmentShare', 'controlDailyLoans', 'treatmentDailyLoans', 'coverage'] as const;
@@ -19,6 +29,8 @@ export const emptyDraft = (): Draft => ({
   effect: '',
   effectMode: 'relative',
   power: '80',
+  testType: 'two-sided',
+  alpha: '5',
   confidence: '95',
   volumeMode: 'total',
   dailyLoans: '',
@@ -38,6 +50,8 @@ export function parseDraft(draft: Draft): Inputs {
     effect: number('effect'),
     effectMode: draft.effectMode as Inputs['effectMode'],
     power: number('power'),
+    testType: draft.testType as Inputs['testType'],
+    alpha: number('alpha'),
     confidence: number('confidence'),
     labelLagDays: number('labelLagDays'),
     coverage: number('coverage'),
@@ -74,6 +88,8 @@ export function exampleDraft(): Draft {
     baseline: '10',
     effect: '10',
     power: '80',
+    testType: 'two-sided',
+    alpha: '5',
     confidence: '95',
     dailyLoans: '500',
     labelLagDays: '97',
@@ -85,7 +101,7 @@ export function restoreScenario(search: string): { draft: Draft; error: string |
   const params = new URLSearchParams(search);
   const version = params.get('v');
   if (!version) return { draft, error: null };
-  if (version !== '1' && version !== '2' && version !== '3')
+  if (!['1', '2', '3', '4'].includes(version))
     return {
       draft,
       error:
@@ -94,15 +110,18 @@ export function restoreScenario(search: string): { draft: Draft; error: string |
   // Incomplete saved scenarios must still ask for their missing assumptions.
   // The new defaults apply to a fresh calculator, not to previously invalid links.
   draft.power = '';
+  draft.testType = '';
+  draft.alpha = '';
   draft.confidence = '';
   for (const key of Object.keys(draft) as (keyof Draft)[]) {
-    if (version !== '3' && ['volumeMode', 'controlDailyLoans', 'treatmentDailyLoans'].includes(key)) continue;
+    if (!['3', '4'].includes(version) && ['volumeMode', 'controlDailyLoans', 'treatmentDailyLoans'].includes(key)) continue;
     if (version === '1' && (key === 'dailyLoans' || key === 'labelLagDays')) continue;
+    if (version !== '4' && ['testType', 'alpha'].includes(key)) continue;
     const value = params.get(key);
     if (value !== null) draft[key] = value.slice(0, 220);
   }
   let error: string | null = null;
-  if (version === '3' && !['total', 'separate'].includes(params.get('volumeMode') ?? '')) {
+  if (['3', '4'].includes(version) && !['total', 'separate'].includes(params.get('volumeMode') ?? '')) {
     draft.volumeMode = 'total';
     draft.dailyLoans = '';
     error = 'The shared link has an invalid or missing volume mode. Enter your funded-loan assumptions below.';
@@ -140,6 +159,12 @@ export function restoreScenario(search: string): { draft: Draft; error: string |
       error =
         'The old link has invalid or missing label delays. Enter the total label delay below.';
   }
+  if (version !== '4') {
+    draft.testType = 'two-sided';
+    draft.alpha = draft.confidence.trim() && Number.isFinite(Number(draft.confidence))
+      ? String(100 - Number(draft.confidence))
+      : '';
+  }
   // Keep malformed values out of HTML number controls; never silently calculate them.
   for (const key of numericKeys) {
     if (draft[key].trim() && !Number.isFinite(Number(draft[key]))) {
@@ -161,7 +186,7 @@ export function scenarioUrl(inputs: Inputs, base: string): string {
   const url = new URL(base);
   url.search = '';
   url.hash = '';
-  url.searchParams.set('v', '3');
+  url.searchParams.set('v', '4');
   for (const [key, value] of Object.entries(inputs))
     if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
   return url.toString();
@@ -189,7 +214,10 @@ export function exportCsv(plan: Plan) {
     [
       'Assumption rates use percent units. Weekly rates, intervals, and forecast_detection_power use fractions: multiply by 100 for percent or percentage points.',
     ],
-    ['Method', 'Two-sided fixed-horizon planning; projected intervals are not observed results'],
+    [
+      'Method',
+      `${plan.inputs.testType} fixed-horizon planning at alpha ${plan.inputs.alpha}%; projected intervals are not observed results`,
+    ],
   ];
   for (const [key, value] of Object.entries(plan.inputs))
     if (value !== undefined) rows.push([key, value]);

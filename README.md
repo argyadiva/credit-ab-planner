@@ -21,16 +21,18 @@ npm run preview
 
 ## Calculator inputs
 
-Power defaults to **80%** and confidence to **95%**, both editable. The baseline, improvement goal, funded volume, and label delay start blank:
+Power defaults to **80%**, test type to **two-sided**, test alpha to **5%**, and displayed interval confidence to **95%**. These settings are editable. The baseline, improvement goal, funded volume, and label delay start blank:
 
 - **Baseline bad-loan rate:** expected bad outcomes among funded loans in control.
 - **Improvement to detect:** the assumed bad-rate reduction, entered as a relative percent or percentage points, with the implied treatment rate displayed. This is the effect the test is designed to detect versus no difference; it is not a guaranteed result or evidence that improvement exceeds a minimum threshold.
 - **Power:** probability of detecting the assumed effect at the final analysis under the model.
-- **Confidence level:** two-sided confidence level; alpha is one minus confidence.
+- **Test type:** two-sided detects a treatment difference in either direction. One-sided tests only whether treatment lowers the bad-loan rate.
+- **Significance level (alpha):** false-positive threshold used for test power and sample size. It is independent of interval confidence. Choose the test direction and alpha before reviewing experiment results.
+- **Confidence level for displayed intervals:** confidence for the two-sided forecast intervals only. Changing it does not change test power or sample size.
 - **Funded-loan volume:** choose total funded loans/day plus treatment allocation, or enter separate control and treatment daily volumes. Fractional calendar-day averages are supported; the combined daily volume must be above zero and at most 1 billion, with positive volume in each arm.
 - **Total label delay:** days from funding to a usable outcome, including the observation window and reporting delay. Zero is supported.
 
-The default volume mode is total plus allocation, with a 50/50 funded split. Switching modes converts valid entered volumes; invalid source volumes leave the destination fields blank. Only fields in the selected mode affect calculations. Advanced settings default to 100% usable labels. Start date and outcome description are optional. Dates appear only when a start date is supplied. **Try an example** explicitly loads illustrative values; **Reset** clears the baseline, improvement, volume, and delay assumptions and restores 80% power, 95% confidence, and advanced defaults.
+The default volume mode is total plus allocation, with a 50/50 funded split. Switching modes converts valid entered volumes; invalid source volumes leave the destination fields blank. Only fields in the selected mode affect calculations. Advanced settings default to 100% usable labels. Start date and outcome description are optional. Dates appear only when a start date is supplied. **Try an example** explicitly loads illustrative values; **Reset** clears the baseline, improvement, volume, and delay assumptions and restores 80% power, two-sided testing at 5% alpha, 95% interval confidence, and advanced defaults.
 
 There are no uploads, accounts, data connections, database, analytics, random-outcome simulations, or server-side calculations. Share links contain manually entered aggregate assumptions. The application does not send calculation inputs to a backend.
 
@@ -44,18 +46,20 @@ Weeks with no usable labels are summarized in the table and can be expanded. CSV
 
 Let `pC` and `pT` be the assumed control and treatment bad rates. Positive reduction means `pC - pT`. Relative reduction `r` gives `pT = pC * (1-r)`; an absolute reduction subtracts percentage points from the baseline rate.
 
-Sample size uses the normal approximation to a two-sided pooled-null z-test for independent proportions. For proposed sizes `nC` and `nT`:
+Sample size uses a normal approximation to a pooled-null z-test for independent proportions. The selected one-sided test checks only for a reduction (`pC - pT > 0`); the two-sided test checks for a difference in either direction. For proposed sizes `nC` and `nT`:
 
 ```text
-alpha = 1 - confidence
+alpha = selected significance level
 pooled = (nC*pC + nT*pT) / (nC+nT)
 SE0 = sqrt(pooled*(1-pooled)*(1/nC + 1/nT))
 SE1 = sqrt(pC*(1-pC)/nC + pT*(1-pT)/nT)
-critical = normal_quantile(1-alpha/2) * SE0
-power = Phi((pC-pT-critical)/SE1) + Phi((-(pC-pT)-critical)/SE1)
+critical = normal_quantile(1-alpha/2) * SE0  # two-sided
+critical = normal_quantile(1-alpha) * SE0    # one-sided
+power = Phi((pC-pT-critical)/SE1)             # one-sided improvement tail
+power = Phi((pC-pT-critical)/SE1) + Phi((-(pC-pT)-critical)/SE1)  # two-sided
 ```
 
-Both volume modes resolve to control and treatment funded loans/day. Integer bisection finds the control target for the treatment/control daily-volume ratio. Treatment size is rounded upward and achieved approximate power is checked again after rounding. This is a fixed-horizon superiority design, not an exact binomial or sequential design. The goal summary translates the assumptions into baseline/treatment bad rates, target power, confidence, and the corresponding two-sided significance level.
+Both volume modes resolve to control and treatment funded loans/day. Integer bisection finds the control target for the treatment/control daily-volume ratio. Treatment size is rounded upward and achieved approximate power is checked again after rounding. This is a fixed-horizon superiority design, not an exact binomial or sequential design. A one-sided test at 5% alpha permits a 5% false-positive chance in the improvement direction. The current two-sided 5% test allocates about 2.5% to each direction; a one-sided 2.5% alpha preserves that improvement threshold. Displayed forecast intervals are always two-sided and use their separate confidence setting; they do not determine the test result.
 
 Arm-rate intervals use Wilson's score method. Reduction intervals use Newcombe's hybrid method combining the Wilson intervals. Forecast intervals substitute expected bad counts `n*p`, which may be fractional. These illustrate projected precision and are not observed-data confidence intervals or a guarantee of statistical significance.
 
@@ -63,7 +67,7 @@ Arm-rate intervals use Wilson's score method. Reduction intervals use Newcombe's
 
 Weekly detection power uses the same `powerAt` formula with that week's actual projected mature control and treatment counts. It is unavailable until both counts are positive. The final forecast can exceed target power slightly because whole collection days produce more usable loans than the minimum targets.
 
-For example, a 10% baseline and 10% relative improvement imply a 9% treatment bad rate. At 80% power and 95% confidence, the calculator estimates the sample needed to distinguish those assumed rates at a two-sided 5% significance level. Smaller improvements need more data; more mature observations increase detection power and precision without changing the assumed bad rates. Merely waiting after every collected outcome has matured adds no information. Weekly projections do not authorize early stopping or guarantee a successful test.
+For example, a 10% baseline and 10% relative improvement imply a 9% treatment bad rate. At 80% power, a two-sided test at 5% alpha estimates the sample needed to detect the assumed difference in either direction. A one-sided test at 5% alpha estimates the sample needed to detect the assumed reduction only. Smaller improvements need more data; more mature observations increase detection power and precision without changing the assumed bad rates. Merely waiting after every collected outcome has matured adds no information. Weekly projections do not authorize early stopping or guarantee a successful test.
 
 ### Timing and coverage
 
@@ -75,7 +79,7 @@ Collection stops at the funded target; follow-up continues for the final cohorts
 
 ### Reference example
 
-A 10% baseline, 10% relative reduction to 9%, 80% power, and 95% confidence require **13,495 labels per arm**. At 500 funded loans per calendar day, split 50/50 with complete labels, sample collection takes **54 days**. A 97-day label delay gives **151 total days** until analysis. Adding November 19, 2026 as the start date gives collection completion on January 12, 2027 and analysis on April 19, 2027.
+A 10% baseline, 10% relative reduction to 9%, 80% power, two-sided alpha of 5%, and 95% displayed interval confidence require **13,495 labels per arm**. At 500 funded loans per calendar day, split 50/50 with complete labels, sample collection takes **54 days**. A 97-day label delay gives **151 total days** until analysis. Adding November 19, 2026 as the start date gives collection completion on January 12, 2027 and analysis on April 19, 2027.
 
 ## Applicability and limits
 
@@ -89,15 +93,15 @@ A 10% baseline, 10% relative reduction to 9%, 80% power, and 95% confidence requ
 
 ## Shared-link compatibility
 
-New links use `v=3` and include `volumeMode=total` with `dailyLoans`/`treatmentShare`, or `volumeMode=separate` with `controlDailyLoans`/`treatmentDailyLoans`. Only the active volume inputs are serialized, alongside the common assumptions and optional `startDate`/`outcome`. CSV assumptions include the selected mode and the resolved daily volumes for both arms.
+New links use `v=4` and include the test type, alpha, interval confidence, and either `volumeMode=total` with `dailyLoans`/`treatmentShare`, or `volumeMode=separate` with `controlDailyLoans`/`treatmentDailyLoans`. Only the active volume inputs are serialized, alongside common assumptions and optional `startDate`/`outcome`. CSV assumptions include the test settings and resolved daily volumes for both arms.
 
-Version-2 links remain readable in total-plus-allocation mode without changing their calculations.
+Version-2 links remain readable in total-plus-allocation mode without changing their calculations. Version-1 through version-3 links retain their prior two-sided test calculations by deriving alpha as 100% minus the saved confidence.
 
-Version-1 links remain readable. Their daily applicants multiplied by funding percentage become funded loans per day; observation plus reporting days become total label delay. Baseline, reduction mode, power, confidence, allocation, coverage, and optional descriptions/dates are preserved. Legacy random seeds are ignored. Explicit power and confidence values in all three link versions are preserved. Versioned links with missing power or confidence still require those assumptions, rather than silently applying the new-calculator defaults. Malformed or unsupported scenarios receive an explanation rather than silently calculating invalid inputs.
+Version-1 links remain readable. Their daily applicants multiplied by funding percentage become funded loans per day; observation plus reporting days become total label delay. Baseline, reduction mode, power, confidence, allocation, coverage, and optional descriptions/dates are preserved. Legacy random seeds are ignored. Explicit power and confidence values in old link versions are preserved; missing assumptions still prevent calculation rather than silently applying new defaults. Malformed or unsupported scenarios receive an explanation rather than silently calculating invalid inputs.
 
 ## Validation and deployment
 
-Tests cover independent statistical references for balanced and unequal allocation, Wilson/Newcombe intervals, equivalent reduction modes, timing and label coverage, optional dates, zero delay, blank/invalid assumptions, all three link versions, both volume modes and switching, arm-specific chart data, reference detection-power projections, pre-maturity power gaps and single-point forecasts, 80%/95% defaults, and safe forecast CSV export. Browser QA covers automatic updates, keyboard navigation, sharing/export, and desktop/mobile layouts.
+Tests cover independent statistical references for balanced and unequal allocation, both test directions and alpha settings, Wilson/Newcombe intervals, independent interval confidence, equivalent reduction modes, timing and label coverage, optional dates, zero delay, blank/invalid assumptions, all four link versions, both volume modes and switching, arm-specific chart data, reference detection-power projections, pre-maturity power gaps and single-point forecasts, calculator defaults, and safe forecast CSV export. Browser QA covers automatic updates, keyboard navigation, sharing/export, and desktop/mobile layouts.
 
 The public repository is `argyadiva/credit-ab-planner`, linked to the existing `credit-ab-planner` project in the `argyadivas-projects` Vercel team. Pushes to `main` trigger production deployments; other branches and pull requests receive Vercel previews. GitHub Actions runs tests and the production build for `main` pushes and pull requests. Vercel uses Node.js 24, `npm ci`, `npm run build`, and Vite's `dist` output. No runtime secrets or environment variables are required.
 

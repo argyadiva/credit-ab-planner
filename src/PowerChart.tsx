@@ -20,7 +20,7 @@ export default function PowerChart({ plan }: { plan: Plan }) {
     <div
       className="forecast-plot"
       role="img"
-      aria-label={`Projected chance of detecting the assumed reduction from ${(plan.pC * 100).toFixed(2)}% to ${(plan.pT * 100).toFixed(2)}% bad rate. Target power is ${plan.inputs.power}% at ${plan.inputs.confidence}% confidence. Planned final analysis is day ${plan.finalDay}. No power estimate is available until both arms have usable outcomes. The weekly table provides power and mature sample counts.`}
+      aria-label={`Projected power of a ${plan.inputs.testType} test at ${plan.inputs.alpha}% alpha to detect the assumed reduction from ${(plan.pC * 100).toFixed(2)}% to ${(plan.pT * 100).toFixed(2)}% bad rate. Target power is ${plan.inputs.power}%. Planned final analysis is day ${plan.finalDay}. No power estimate is available until both arms have usable outcomes. The weekly table provides power and mature sample counts.`}
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={plan.weeks} margin={{ top: 24, right: 18, left: 0, bottom: 8 }}>

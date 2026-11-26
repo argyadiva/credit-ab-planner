@@ -77,7 +77,7 @@ export default function ForecastChart({ plan }: { plan: Plan }) {
               const isControl = name === 'control' || name === 'controlInterval';
               const label = isControl ? 'Control baseline' : 'Expected treatment';
               return Array.isArray(value)
-                ? [`${Number(value[0]).toFixed(2)}% to ${Number(value[1]).toFixed(2)}%`, `${label} · ${plan.inputs.confidence}% CI`]
+                ? [`${Number(value[0]).toFixed(2)}% to ${Number(value[1]).toFixed(2)}%`, `${label} · ${plan.inputs.confidence}% two-sided CI`]
                 : [`${Number(value).toFixed(2)}%`, label];
             }}
             contentStyle={{ borderRadius: 10, border: '1px solid #dbe5df', fontSize: 14 }}
