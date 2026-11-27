@@ -433,11 +433,7 @@ export default function App() {
     setLinkError(null);
   };
   const fieldError = (key: InputKey) =>
-    draft[key].trim() || touched[key]
-      ? key === 'alpha'
-        ? errors.alpha ?? errors.testType
-        : errors[key]
-      : undefined;
+    draft[key].trim() || touched[key] ? errors[key] : undefined;
   const field = (
     key: keyof Draft,
     label: string,
@@ -601,6 +597,38 @@ export default function App() {
                 <span>Expected treatment bad rate</span>
                 <strong>{target === null ? '—' : `${target.toFixed(2)}%`}</strong>
               </div>
+              <fieldset className="test-type">
+                <legend>Test direction</legend>
+                <div className="test-type-options">
+                  {([
+                    ['two-sided', 'Two-sided', 'Detects improvement or harm'],
+                    ['one-sided', 'Improvement only', 'Tests whether bad rate is lower'],
+                  ] as const).map(([value, title, description]) => (
+                    <label
+                      key={value}
+                      className={draft.testType === value ? 'selected' : ''}
+                    >
+                      <input
+                        type="radio"
+                        name="test-type"
+                        value={value}
+                        checked={draft.testType === value}
+                        aria-label={title}
+                        onChange={() => change('testType', value)}
+                      />
+                      <span className="test-type-copy">
+                        <strong>{title}</strong>
+                        <small>{description}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              {errors.testType && (
+                <p className="field-error" role="alert">
+                  {errors.testType}
+                </p>
+              )}
               <div className="field-row">
                 {field('power', 'Statistical power', {
                   suffix: '%',
@@ -610,20 +638,7 @@ export default function App() {
                 {field('alpha', 'Significance level (alpha)', {
                   suffix: '%',
                   placeholder: 'e.g. 5',
-                  hint: 'Choose the test direction and alpha before reviewing experiment results. One-sided alpha controls false declarations of improvement; two-sided alpha covers false declarations of a difference in either direction.',
-                  children: (
-                    <>
-                      <select
-                        aria-label="Test type"
-                        value={draft.testType}
-                        onChange={(event) => change('testType', event.target.value)}
-                      >
-                        <option value="two-sided">Two-sided</option>
-                        <option value="one-sided">One-sided · improvement</option>
-                      </select>
-                      <ChevronDown className="select-chevron" size={14} />
-                    </>
-                  ),
+                  hint: 'Choose alpha before reviewing experiment results. For example, one-sided alpha at 5% allows a 5% false-improvement rate; two-sided alpha at 5% allocates about 2.5% to each direction.',
                 })}
               </div>
               <fieldset className="volume-mode">
